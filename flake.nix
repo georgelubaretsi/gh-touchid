@@ -37,11 +37,13 @@
 
             installPhase = ''
               runHook preInstall
-              install -Dm755 gh-touchid "$out/bin/gh-touchid"
-              wrapProgram "$out/bin/gh-touchid" \
+              install -Dm755 gh-touchid "$out/libexec/gh-touchid"
+              makeWrapper "$out/libexec/gh-touchid" "$out/bin/gh-touchid" \
                 --set GH_TOUCHID_GH "${pkgs.gh}/bin/gh" \
                 --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.git ]}"
-              makeWrapper "$out/bin/gh-touchid" "$out/bin/gh" \
+              makeWrapper "$out/libexec/gh-touchid" "$out/bin/gh" \
+                --set GH_TOUCHID_GH "${pkgs.gh}/bin/gh" \
+                --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.git ]}" \
                 --add-flags gh
               runHook postInstall
             '';
