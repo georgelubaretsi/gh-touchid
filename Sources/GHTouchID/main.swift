@@ -31,7 +31,7 @@ private enum ToolError: Error, CustomStringConvertible {
         case let .missingToken(repository):
             return "no token is stored for \(repository); run `gh-touchid set` first"
         case .invalidToken:
-            return "the token must not be empty or contain a newline"
+            return "the token must contain only printable ASCII and no whitespace"
         case .forbiddenCommand:
             return "this authentication command could expose or replace the stored token"
         case let .missingGitHubCLI(path):
@@ -177,6 +177,26 @@ private func isForbiddenGitHubCommand(_ arguments: [String]) -> Bool {
     ].contains(arguments[1])
 }
 
+private func normalizeToken(_ raw: String) throws -> String {
+    var token = raw
+    while token.last == "\n" || token.last == "\r" {
+        token.removeLast()
+    }
+
+    let pasteStart = "\u{1B}[200~"
+    let pasteEnd = "\u{1B}[201~"
+    if token.hasPrefix(pasteStart), token.hasSuffix(pasteEnd) {
+        token.removeFirst(pasteStart.count)
+        token.removeLast(pasteEnd.count)
+    }
+
+    guard !token.isEmpty,
+          token.unicodeScalars.allSatisfy({ (0x21 ... 0x7E).contains($0.value) }) else {
+        throw ToolError.invalidToken
+    }
+    return token
+}
+
 private func storeToken(_ token: String, repository: String) throws {
     guard !token.isEmpty, !token.contains("\n"), !token.contains("\r") else {
         throw ToolError.invalidToken
@@ -245,13 +265,10 @@ private func loadToken(repository: String) throws -> String {
 private func readToken() throws -> String {
     if isatty(STDIN_FILENO) == 0 {
         let data = FileHandle.standardInput.readDataToEndOfFile()
-        guard var token = String(data: data, encoding: .utf8) else {
+        guard let token = String(data: data, encoding: .utf8) else {
             throw ToolError.input("stdin is not valid UTF-8")
         }
-        while token.last == "\n" || token.last == "\r" {
-            token.removeLast()
-        }
-        return token
+        return try normalizeToken(token)
     }
 
     var original = termios()
@@ -275,7 +292,7 @@ private func readToken() throws -> String {
     guard let token = readLine(strippingNewline: true) else {
         throw ToolError.input("no token was provided")
     }
-    return token
+    return try normalizeToken(token)
 }
 
 private func githubCLI() throws -> (URL, [String]) {
