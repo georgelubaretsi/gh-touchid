@@ -329,6 +329,7 @@ private func runGitHubCLI(arguments: [String], token: String) throws -> Int32 {
 
     var environment = ProcessInfo.processInfo.environment
     environment["GH_CONFIG_DIR"] = configDirectory.path
+    environment["GH_PAGER"] = "cat"
     environment["GH_TOKEN"] = token
     environment.removeValue(forKey: "GITHUB_TOKEN")
     environment.removeValue(forKey: "GH_ENTERPRISE_TOKEN")
