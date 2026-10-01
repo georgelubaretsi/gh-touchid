@@ -17,6 +17,7 @@ private enum ToolError: Error, CustomStringConvertible {
     case missingGitHubCLI(String)
     case unsafeTerminalOutput
     case input(String)
+    case session(String)
 
     var description: String {
         switch self {
@@ -40,6 +41,8 @@ private enum ToolError: Error, CustomStringConvertible {
             return "refusing to emit a Git credential to a terminal"
         case let .input(message):
             return "input error: \(message)"
+        case let .session(message):
+            return "unlock error: \(message)"
         }
     }
 
@@ -48,10 +51,18 @@ private enum ToolError: Error, CustomStringConvertible {
       gh-touchid set
       gh-touchid gh <arguments...>
       gh-touchid git-credential <get|store|erase>
+      gh-touchid unlock --for <duration> [--repo <owner/name>]... [--all] [--until-screen-lock]
+      gh-touchid status
+      gh-touchid lock
 
     `set` reads a GitHub token from hidden input or stdin.
     `gh` runs GitHub CLI with the stored token after Touch ID.
     `git-credential` implements Git's HTTPS credential-helper protocol.
+    `unlock` asks for Touch ID once, then lets `gh` and Git use the named repositories' tokens
+    without asking again until the time runs out (30m, 8h, 1h30m, at most 1d). Without --repo it
+    unlocks the current repository; --all unlocks every stored one.
+    `status` lists what is unlocked and until when; `lock` ends every unlock now.
+    Each use during an unlock is logged to ~/Library/Logs/gh-touchid/access.log.
     """
 }
 
@@ -134,7 +145,15 @@ private func repositoryIdentifier() throws -> String {
         throw ToolError.missingRepository
     }
 
-    var repository = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard let repository = validRepository(path) else {
+        throw ToolError.missingRepository
+    }
+    return repository
+}
+
+/// `owner/name` with a trailing `.git` and surrounding slashes removed, or nil when it is not one.
+private func validRepository(_ raw: String) -> String? {
+    var repository = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     if repository.hasSuffix(".git") {
         repository.removeLast(4)
     }
@@ -144,7 +163,7 @@ private func repositoryIdentifier() throws -> String {
     guard components.count == 2,
           components.allSatisfy({ !$0.isEmpty }),
           components.joined().unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
-        throw ToolError.missingRepository
+        return nil
     }
     return repository
 }
@@ -262,6 +281,26 @@ private func loadToken(repository: String) throws -> String {
     return token
 }
 
+/// Every repository a token is stored for (attributes only; no token is read).
+private func storedRepositories() throws -> [String] {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: keychainService,
+        kSecReturnAttributes as String: true,
+        kSecMatchLimit as String: kSecMatchLimitAll,
+    ]
+
+    var items: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &items)
+    if status == errSecItemNotFound {
+        return []
+    }
+    guard status == errSecSuccess, let list = items as? [[String: Any]] else {
+        throw ToolError.keychain(keychainError(status))
+    }
+    return list.compactMap { $0[kSecAttrAccount as String] as? String }.compactMap(validRepository)
+}
+
 private func readToken() throws -> String {
     if isatty(STDIN_FILENO) == 0 {
         let data = FileHandle.standardInput.readDataToEndOfFile()
@@ -353,6 +392,10 @@ private func withToken(
     reason: String,
     _ body: (String) throws -> Int32
 ) throws -> Int32 {
+    // during an unlock (`gh-touchid unlock`) the agent hands the token over without another Touch ID
+    if let token = sessionToken(repository: repository) {
+        return try body(token)
+    }
     try authenticate(reason: reason)
     let token = try loadToken(repository: repository)
     return try body(token)
@@ -360,6 +403,537 @@ private func withToken(
 
 private func discardStandardInput() {
     _ = FileHandle.standardInput.readDataToEndOfFile()
+}
+
+// MARK: - Unlocking for a while
+//
+// `unlock` asks for Touch ID once, reads the named repositories' tokens from the Keychain and hands them to a small
+// background agent, which keeps them in memory only and answers on a socket in the user's private temporary directory
+// until each one's time runs out. While a repository is unlocked, `gh` and `git-credential get` ask the agent before
+// asking for Touch ID. Any process running as the user can obtain an unlocked token; that is what unlocking means. The
+// agent logs every request with the process chain that made it, and exits when nothing is left unlocked.
+
+private let longestUnlock: TimeInterval = 24 * 60 * 60
+
+/// `30m`, `8h`, `1h30m`, `1d`: at most one day.
+private func parseDuration(_ text: String) throws -> TimeInterval {
+    let pattern = #"^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$"#
+    let range = NSRange(text.startIndex..., in: text)
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: text, range: range) else {
+        throw ToolError.input("--for takes a duration like 30m, 8h, 1h30m or 1d")
+    }
+    func part(_ index: Int) -> Double {
+        guard let range = Range(match.range(at: index), in: text) else {
+            return 0
+        }
+        return Double(text[range]) ?? 0
+    }
+    let seconds = part(1) * 86400 + part(2) * 3600 + part(3) * 60
+    guard seconds > 0 else {
+        throw ToolError.input("--for takes a duration like 30m, 8h, 1h30m or 1d")
+    }
+    guard seconds <= longestUnlock else {
+        throw ToolError.input("the longest unlock is 1d")
+    }
+    return seconds
+}
+
+private func durationText(_ seconds: TimeInterval) -> String {
+    let minutes = Int(seconds / 60)
+    let parts = [(minutes / 1440, "d"), (minutes % 1440 / 60, "h"), (minutes % 60, "m")]
+    return parts.filter { $0.0 > 0 }.map { "\($0.0)\($0.1)" }.joined()
+}
+
+private func localTime(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    return formatter.string(from: date)
+}
+
+private func repositoryList(_ repositories: [String]) -> String {
+    let shown = repositories.prefix(3).joined(separator: ", ")
+    return repositories.count > 3 ? "\(shown) and \(repositories.count - 3) more" : shown
+}
+
+/// The user's own temporary directory from the system, not $TMPDIR, which development shells change.
+private let sessionDirectory: String = {
+    var buffer = [CChar](repeating: 0, count: 1024)
+    let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
+    let base = length > 0 ? String(cString: buffer) : NSTemporaryDirectory()
+    return (base as NSString).appendingPathComponent("gh-touchid")
+}()
+
+private let sessionSocketPath = (sessionDirectory as NSString).appendingPathComponent("agent.sock")
+
+private let accessLogPath = (NSHomeDirectory() as NSString)
+    .appendingPathComponent("Library/Logs/gh-touchid/access.log")
+
+private func ensureSessionDirectory() throws {
+    if mkdir(sessionDirectory, 0o700) != 0 && errno != EEXIST {
+        throw ToolError.session("cannot create \(sessionDirectory)")
+    }
+    var status = stat()
+    guard lstat(sessionDirectory, &status) == 0,
+          status.st_mode & S_IFMT == S_IFDIR,
+          status.st_uid == getuid(),
+          status.st_mode & 0o077 == 0 else {
+        throw ToolError.session("\(sessionDirectory) must be a private directory owned by you")
+    }
+}
+
+private func socketAddress(_ path: String) throws -> sockaddr_un {
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8)
+    let capacity = MemoryLayout.size(ofValue: address.sun_path)
+    guard bytes.count < capacity else {
+        throw ToolError.session("socket path is too long: \(path)")
+    }
+    withUnsafeMutableBytes(of: &address.sun_path) { raw in
+        for (index, byte) in bytes.enumerated() {
+            raw[index] = byte
+        }
+        raw[bytes.count] = 0
+    }
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    return address
+}
+
+private func withSocketAddress<T>(
+    _ address: inout sockaddr_un,
+    _ body: (UnsafePointer<sockaddr>, socklen_t) -> T
+) -> T {
+    withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            body($0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+}
+
+private func configureSocket(_ fd: Int32, timeoutSeconds: Int) {
+    var one: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+    var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+}
+
+private func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+    data.withUnsafeBytes { raw -> Bool in
+        guard let base = raw.baseAddress else {
+            return true
+        }
+        var offset = 0
+        while offset < raw.count {
+            let written = write(fd, base + offset, raw.count - offset)
+            if written <= 0 {
+                return false
+            }
+            offset += written
+        }
+        return true
+    }
+}
+
+/// One newline-terminated message, at most 64 KiB.
+private func readMessage(_ fd: Int32) -> Data? {
+    var data = Data()
+    var byte: UInt8 = 0
+    while data.count < 65536 {
+        let count = read(fd, &byte, 1)
+        if count <= 0 {
+            return nil
+        }
+        if byte == 0x0A {
+            return data
+        }
+        data.append(byte)
+    }
+    return nil
+}
+
+private func sendMessage(_ fd: Int32, _ message: [String: Any]) -> Bool {
+    guard let body = try? JSONSerialization.data(withJSONObject: message) else {
+        return false
+    }
+    return writeAll(fd, body + Data([0x0A]))
+}
+
+/// Ask the running agent; nil when no agent answers as this user.
+private func agentRequest(_ request: [String: Any]) -> [String: Any]? {
+    guard var address = try? socketAddress(sessionSocketPath) else {
+        return nil
+    }
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        return nil
+    }
+    defer { close(fd) }
+    configureSocket(fd, timeoutSeconds: 5)
+    guard withSocketAddress(&address, { connect(fd, $0, $1) }) == 0 else {
+        return nil
+    }
+    var uid: uid_t = 0
+    var gid: gid_t = 0
+    guard getpeereid(fd, &uid, &gid) == 0, uid == getuid(),
+          sendMessage(fd, request),
+          let line = readMessage(fd),
+          let reply = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+        return nil
+    }
+    return reply
+}
+
+private func sessionToken(repository: String) -> String? {
+    guard let reply = agentRequest(["op": "get", "repo": repository]),
+          let token = reply["token"] as? String,
+          !token.isEmpty else {
+        return nil
+    }
+    return token
+}
+
+private func appendAccessLog(_ message: String) {
+    let directory = (accessLogPath as NSString).deletingLastPathComponent
+    try? FileManager.default.createDirectory(
+        atPath: directory,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let stamp = ISO8601DateFormatter.string(
+        from: Date(),
+        timeZone: .current,
+        formatOptions: [.withInternetDateTime]
+    )
+    let fd = open(accessLogPath, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+    guard fd >= 0 else {
+        return
+    }
+    defer { close(fd) }
+    _ = writeAll(fd, Data("\(stamp) \(message)\n".utf8))
+}
+
+private func processPath(_ pid: pid_t) -> String {
+    var buffer = [CChar](repeating: 0, count: 4096)
+    let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+    return length > 0 ? String(cString: buffer) : "?"
+}
+
+private func parentProcess(_ pid: pid_t) -> pid_t? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else {
+        return nil
+    }
+    return pid_t(info.pbi_ppid)
+}
+
+/// `gh-touchid[812] < git[810] < zsh[790] < bun[700]`: who asked, and who started it.
+private func processChain(_ pid: pid_t) -> String {
+    var parts: [String] = []
+    var current: pid_t? = pid
+    while let process = current, process > 1, parts.count < 6 {
+        parts.append("\((processPath(process) as NSString).lastPathComponent)[\(process)]")
+        current = parentProcess(process)
+    }
+    return parts.isEmpty ? "unknown process" : parts.joined(separator: " < ")
+}
+
+/// The peer of a local socket (`LOCAL_PEERPID` at level `SOL_LOCAL`, from sys/un.h).
+private func peerProcess(_ fd: Int32) -> pid_t? {
+    var pid: pid_t = 0
+    var length = socklen_t(MemoryLayout<pid_t>.size)
+    guard getsockopt(fd, 0, 0x002, &pid, &length) == 0 else {
+        return nil
+    }
+    return pid
+}
+
+private final class UnlockAgent: @unchecked Sendable {
+    private struct Grant {
+        let token: String
+        let expires: Date
+        let untilScreenLock: Bool
+    }
+
+    private var grants: [String: Grant] = [:]
+    private var sources: [DispatchSourceProtocol] = []
+    private let listener: Int32
+    private let started = Date()
+
+    init(listener: Int32) {
+        self.listener = listener
+    }
+
+    func start() {
+        let accepting = DispatchSource.makeReadSource(fileDescriptor: listener, queue: .main)
+        accepting.setEventHandler { [self] in
+            let client = accept(listener, nil, nil)
+            if client >= 0 {
+                handle(client)
+                close(client)
+            }
+        }
+        accepting.resume()
+
+        let ticking = DispatchSource.makeTimerSource(queue: .main)
+        ticking.schedule(deadline: .now() + 1, repeating: 1)
+        ticking.setEventHandler { [self] in expire() }
+        ticking.resume()
+
+        signal(SIGHUP, SIG_IGN)
+        sources = [accepting, ticking]
+        for number in [SIGTERM, SIGINT] {
+            signal(number, SIG_IGN)
+            let stopping = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            stopping.setEventHandler { [self] in finish("stopped by signal \(number)") }
+            stopping.resume()
+            sources.append(stopping)
+        }
+
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsLocked"),
+            object: nil,
+            queue: .main
+        ) { [self] _ in screenLocked() }
+    }
+
+    private func handle(_ client: Int32) {
+        configureSocket(client, timeoutSeconds: 2)
+        var uid: uid_t = 0
+        var gid: gid_t = 0
+        guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else {
+            return
+        }
+        let who = peerProcess(client).map(processChain) ?? "unknown process"
+        guard let line = readMessage(client),
+              let request = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let operation = request["op"] as? String else {
+            _ = sendMessage(client, ["error": "bad request"])
+            return
+        }
+
+        switch operation {
+        case "get":
+            let repository = request["repo"] as? String ?? ""
+            if let grant = grants[repository], grant.expires > Date() {
+                _ = sendMessage(client, ["token": grant.token])
+                appendAccessLog("granted \(repository) to \(who)")
+            } else {
+                _ = sendMessage(client, ["error": "not unlocked"])
+                appendAccessLog("refused \(repository) to \(who): not unlocked")
+            }
+
+        case "add":
+            let entries = request["entries"] as? [[String: Any]] ?? []
+            for entry in entries {
+                guard let repository = entry["repo"] as? String, validRepository(repository) == repository,
+                      let token = entry["token"] as? String, !token.isEmpty,
+                      let seconds = entry["seconds"] as? Double, seconds > 0, seconds <= longestUnlock else {
+                    continue
+                }
+                let untilScreenLock = entry["untilScreenLock"] as? Bool ?? false
+                let expires = Date().addingTimeInterval(seconds)
+                grants[repository] = Grant(token: token, expires: expires, untilScreenLock: untilScreenLock)
+                let lockNote = untilScreenLock ? " or screen lock" : ""
+                appendAccessLog("unlocked \(repository) until \(localTime(expires))\(lockNote) by \(who)")
+            }
+            _ = sendMessage(client, ["ok": true])
+
+        case "status":
+            let entries = grants.map { repository, grant -> [String: Any] in
+                [
+                    "repo": repository,
+                    "expires": grant.expires.timeIntervalSince1970,
+                    "untilScreenLock": grant.untilScreenLock,
+                ]
+            }
+            _ = sendMessage(client, ["entries": entries])
+
+        case "lock":
+            _ = sendMessage(client, ["ok": true])
+            finish("locked by \(who)")
+
+        default:
+            _ = sendMessage(client, ["error": "unknown request"])
+        }
+    }
+
+    private func expire() {
+        let now = Date()
+        for (repository, grant) in grants where grant.expires <= now {
+            grants.removeValue(forKey: repository)
+            appendAccessLog("expired \(repository)")
+        }
+        // a fresh agent waits a little for the unlock that started it
+        if grants.isEmpty && now.timeIntervalSince(started) > 30 {
+            finish("nothing left unlocked")
+        }
+    }
+
+    private func screenLocked() {
+        for (repository, grant) in grants where grant.untilScreenLock {
+            grants.removeValue(forKey: repository)
+            appendAccessLog("locked \(repository): the screen locked")
+        }
+        if grants.isEmpty {
+            finish("the screen locked")
+        }
+    }
+
+    private func finish(_ reason: String) -> Never {
+        appendAccessLog("agent stopped: \(reason)")
+        unlink(sessionSocketPath)
+        exit(0)
+    }
+}
+
+private func runAgent() throws -> Never {
+    try ensureSessionDirectory()
+    if agentRequest(["op": "status"]) != nil {
+        exit(0) // another agent is already serving
+    }
+    unlink(sessionSocketPath)
+    var address = try socketAddress(sessionSocketPath)
+    let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard listener >= 0 else {
+        throw ToolError.session("cannot create a socket")
+    }
+    let previous = umask(0o077)
+    let bound = withSocketAddress(&address) { bind(listener, $0, $1) }
+    umask(previous)
+    guard bound == 0, listen(listener, 16) == 0 else {
+        throw ToolError.session("cannot listen on \(sessionSocketPath)")
+    }
+
+    let agent = UnlockAgent(listener: listener)
+    agent.start()
+    appendAccessLog("agent started")
+    // keeps the main run loop alive for the screen-lock notification; work arrives on the main queue
+    let keepAlive = Timer(timeInterval: 3600, repeats: true) { _ in }
+    RunLoop.main.add(keepAlive, forMode: .default)
+    while true {
+        RunLoop.main.run(until: .distantFuture)
+    }
+}
+
+/// Start the agent as its own session, detached from the terminal, with no inherited input, output or environment.
+private func spawnAgent() throws {
+    guard let executable = Bundle.main.executablePath else {
+        throw ToolError.session("cannot find gh-touchid's own executable")
+    }
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
+    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+
+    var argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable), strdup("agent"), nil]
+    defer { argv.forEach { free($0) } }
+    var environment: [UnsafeMutablePointer<CChar>?] = [nil]
+    var pid: pid_t = 0
+    let status = posix_spawn(&pid, executable, &actions, &attributes, &argv, &environment)
+    guard status == 0 else {
+        throw ToolError.session("cannot start the agent: \(String(cString: strerror(status)))")
+    }
+}
+
+private func ensureAgent() throws {
+    if agentRequest(["op": "status"]) != nil {
+        return
+    }
+    try ensureSessionDirectory()
+    try spawnAgent()
+    for _ in 0 ..< 50 {
+        if agentRequest(["op": "status"]) != nil {
+            return
+        }
+        usleep(100_000)
+    }
+    throw ToolError.session("the agent did not start")
+}
+
+private func unlock(_ arguments: [String]) throws -> Int32 {
+    var duration: TimeInterval?
+    var repositories: [String] = []
+    var all = false
+    var untilScreenLock = false
+    var index = 0
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--for":
+            guard index + 1 < arguments.count else {
+                throw ToolError.usage
+            }
+            duration = try parseDuration(arguments[index + 1])
+            index += 2
+        case "--repo":
+            guard index + 1 < arguments.count, let repository = validRepository(arguments[index + 1]) else {
+                throw ToolError.input("--repo takes owner/name")
+            }
+            repositories.append(repository)
+            index += 2
+        case "--all":
+            all = true
+            index += 1
+        case "--until-screen-lock":
+            untilScreenLock = true
+            index += 1
+        default:
+            throw ToolError.usage
+        }
+    }
+    guard let seconds = duration else {
+        throw ToolError.input("unlock needs --for, for example --for 8h (at most 1d)")
+    }
+    if all {
+        repositories += try storedRepositories()
+    }
+    if repositories.isEmpty {
+        repositories = [try repositoryIdentifier()]
+    }
+    repositories = Array(Set(repositories)).sorted()
+
+    try authenticate(reason: "Unlock GitHub access for \(repositoryList(repositories)) for \(durationText(seconds))")
+    let entries: [[String: Any]] = try repositories.map { repository in
+        [
+            "repo": repository,
+            "token": try loadToken(repository: repository),
+            "seconds": seconds,
+            "untilScreenLock": untilScreenLock,
+        ]
+    }
+    try ensureAgent()
+    guard let reply = agentRequest(["op": "add", "entries": entries]), reply["ok"] as? Bool == true else {
+        throw ToolError.session("the agent did not accept the unlock")
+    }
+    let lockNote = untilScreenLock ? " or until the screen locks" : ""
+    let until = localTime(Date().addingTimeInterval(seconds))
+    fputs("Unlocked \(repositories.joined(separator: ", ")) until \(until)\(lockNote).\n", stderr)
+    return 0
+}
+
+private func status() -> Int32 {
+    guard let reply = agentRequest(["op": "status"]),
+          let entries = reply["entries"] as? [[String: Any]],
+          !entries.isEmpty else {
+        print("Nothing is unlocked.")
+        return 0
+    }
+    for entry in entries.sorted(by: { ($0["repo"] as? String ?? "") < ($1["repo"] as? String ?? "") }) {
+        let repository = entry["repo"] as? String ?? "?"
+        let expires = Date(timeIntervalSince1970: entry["expires"] as? Double ?? 0)
+        let lockNote = entry["untilScreenLock"] as? Bool == true ? " or screen lock" : ""
+        print("\(repository)  until \(localTime(expires))\(lockNote)")
+    }
+    return 0
 }
 
 private func run() throws -> Int32 {
@@ -424,6 +998,28 @@ private func run() throws -> Int32 {
         default:
             throw ToolError.usage
         }
+
+    case "unlock":
+        return try unlock(Array(arguments.dropFirst()))
+
+    case "status":
+        guard arguments.count == 1 else {
+            throw ToolError.usage
+        }
+        return status()
+
+    case "lock":
+        guard arguments.count == 1 else {
+            throw ToolError.usage
+        }
+        print(agentRequest(["op": "lock"]) == nil ? "Nothing was unlocked." : "Locked: nothing is unlocked.")
+        return 0
+
+    case "agent":
+        guard arguments.count == 1 else {
+            throw ToolError.usage
+        }
+        try runAgent()
 
     default:
         throw ToolError.usage
