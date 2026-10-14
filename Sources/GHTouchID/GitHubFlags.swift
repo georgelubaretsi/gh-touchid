@@ -104,21 +104,14 @@ func repositorySelector(_ arguments: [String], flags: CommandFlags) throws -> St
 }
 
 /// The flags of the command `arguments` run, from `gh help reference` of the gh that will run; nil when the reference
-/// cannot be read or does not know the command (aliases included). The command path is the leading arguments that
-/// name commands.
+/// cannot be read or does not lead `arguments` to a command without subcommands.
 func gitHubCommandFlags(_ arguments: [String]) -> CommandFlags? {
     guard let text = gitHubReference() else {
         return nil
     }
     let reference = parseGitHubReference(text)
-    var path = ""
-    for word in arguments {
-        guard let next = reference.names[path.isEmpty ? word : "\(path) \(word)"] else {
-            break
-        }
-        path = next
-    }
-    guard var flags = reference.commands[path] else {
+    let path = invokedCommand(arguments, in: reference)
+    guard !path.isEmpty, !reference.parents.contains(path), var flags = reference.commands[path] else {
         return nil
     }
     flags.long["repo"] = true
@@ -126,16 +119,56 @@ func gitHubCommandFlags(_ arguments: [String]) -> CommandFlags? {
     return flags
 }
 
-/// Commands by path (`issue create`), and the paths their names and aliases lead to: `issue new` → `issue create`,
-/// `cs` → `codespace`, `codespace ls` → `codespace list`.
+/// The command `arguments` run, found as cobra finds it: at each level the first word that is neither a flag nor the
+/// value of one (judged by the flags of the command reached so far) names a subcommand or an alias; it is removed and
+/// the search goes on one level down. Flags before it, as in `pr -R o/r merge`, stay for the levels below.
+private func invokedCommand(_ arguments: [String], in reference: GitHubReference) -> String {
+    var path = ""
+    var remaining = arguments
+    while let index = commandWordIndex(remaining, flags: reference.commands[path] ?? CommandFlags()),
+          let next = reference.names[path.isEmpty ? remaining[index] : "\(path) \(remaining[index])"] {
+        path = next
+        remaining.remove(at: index)
+    }
+    return path
+}
+
+/// Where the first word that is not a flag or a flag's value is, before `--`. As in cobra, `--x` and `-x` without an
+/// inline value take the next argument unless `flags` knows them as boolean; groups such as `-wR` take none.
+private func commandWordIndex(_ arguments: [String], flags: CommandFlags) -> Int? {
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if argument == "--" {
+            return nil
+        }
+        if argument.hasPrefix("--"), !argument.contains("="), flags.long[String(argument.dropFirst(2))] != false {
+            index += 2
+        } else if argument.count == 2, argument.hasPrefix("-"), !argument.contains("="),
+                  let shorthand = argument.last, flags.short[shorthand] != false {
+            index += 2
+        } else if !argument.isEmpty, !argument.hasPrefix("-") {
+            return index
+        } else {
+            index += 1
+        }
+    }
+    return nil
+}
+
+/// Commands by path (`issue create`), the paths their names and aliases lead to (`issue new` → `issue create`,
+/// `cs` → `codespace`, `codespace ls` → `codespace list`, `co` → `pr checkout`), and the commands that have
+/// subcommands.
 private struct GitHubReference {
     var commands: [String: CommandFlags] = [:]
     var names: [String: String] = [:]
+    var parents: Set<String> = []
 }
 
 /// Sections `### gh <path> [args]` (one `#` per level below `gh`), each followed by its flags
 /// (`  -b, --body string   desc`, `      --web   desc`: a type word after the long name means it takes a value,
 /// unless it has an optional value as in `string[="last"]`) and an "Aliases" paragraph (`gh issue new, gh …`).
+/// A section of a top-level alias holds just `Alias for "pr checkout"`.
 private func parseGitHubReference(_ text: String) -> GitHubReference {
     var reference = GitHubReference()
     var path: String?
@@ -143,7 +176,7 @@ private func parseGitHubReference(_ text: String) -> GitHubReference {
     var inAliases = false
     for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
         if line.hasPrefix("#") {
-            if let path {
+            if let path, reference.names[path] == path {
                 reference.commands[path] = flags
             }
             path = commandPath(line)
@@ -151,6 +184,10 @@ private func parseGitHubReference(_ text: String) -> GitHubReference {
             inAliases = false
             if let path {
                 reference.names[path] = path
+                let parent = path.split(separator: " ").dropLast().joined(separator: " ")
+                if !parent.isEmpty {
+                    reference.parents.insert(parent)
+                }
             }
             continue
         }
@@ -166,6 +203,11 @@ private func parseGitHubReference(_ text: String) -> GitHubReference {
                     reference.names[parent.isEmpty ? String(name) : "\(parent) \(name)"] = current
                 }
             }
+        } else if line.hasPrefix("Alias for \""), line.hasSuffix("\""), !current.contains(" ") {
+            let target = line.dropFirst("Alias for \"".count).dropLast()
+            if !target.isEmpty {
+                reference.names[current] = String(target)
+            }
         } else if line.hasPrefix(" "), let flag = flagDefinition(line) {
             flags.long[flag.long] = flag.takesValue
             if let shorthand = flag.short {
@@ -173,7 +215,7 @@ private func parseGitHubReference(_ text: String) -> GitHubReference {
             }
         }
     }
-    if let path {
+    if let path, reference.names[path] == path {
         reference.commands[path] = flags
     }
     return reference
