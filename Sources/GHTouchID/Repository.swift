@@ -90,10 +90,21 @@ func repositoriesOption(_ options: [String: [String]]) throws -> [String] {
 
 /// The repository a `gh` command is for: `-R`/`--repo`, else GH_REPO, else the current repository. gh's flag
 /// definitions are read only when a flag before the selector may take it as its value; when they cannot be read, only
-/// `-R`/`--repo` is known to take a value (a wrong guess only yields a token gh cannot use).
-func requestedRepository(_ arguments: [String]) throws -> String {
-    let flags = repositorySelectorIsAmbiguous(arguments) ? gitHubCommandFlags(arguments) : nil
-    if let selector = try repositorySelector(arguments, flags: flags ?? CommandFlags()) {
+/// `-R`/`--repo` is known to take a value (a wrong guess only yields a token gh cannot use). With `exact`, for a token
+/// not limited to one repository (an account's), it refuses instead of guessing.
+func requestedRepository(_ arguments: [String], exact: Bool) throws -> String {
+    var flags = CommandFlags()
+    if repositorySelectorIsAmbiguous(arguments) {
+        if let known = gitHubCommandFlags(arguments) {
+            flags = known
+        } else if exact {
+            throw ToolError.refused(
+                "cannot tell which repository this command acts on: gh help reference does not settle "
+                    + "whether a flag takes the -R/--repo after it"
+            )
+        }
+    }
+    if let selector = try repositorySelector(arguments, flags: flags) {
         return try repositorySpecification(selector)
     }
     if let repository = ProcessInfo.processInfo.environment["GH_REPO"], !repository.isEmpty {

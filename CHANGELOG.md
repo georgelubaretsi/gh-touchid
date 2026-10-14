@@ -45,7 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configure it per owner in the global Git config with `credential.useHttpPath=true` (see the README).
 - `gh` and Git pick the repository from `-R`/`--repo` (including `HOST/OWNER/REPO` and URLs) or `GH_REPO` before
   the current repository; Git uses the repository in the URL. When a flag right before `-R` might take a value,
-  gh-touchid reads which flags take values from the pinned `gh`'s `help reference`, only for such ambiguous commands.
+  gh-touchid reads which flags take values from the pinned `gh`'s `help reference`, only for such ambiguous commands;
+  `as <login> gh …` is refused when that cannot settle it.
 - **Breaking:** the Nix package pins `gh` at build time and no longer honours `GH_TOUCHID_GH`.
 - `status` lists stored Apps and accounts (names only), sessions and elevations; `lock` ends sessions and
   elevations.

@@ -100,7 +100,8 @@ zsh[790] < Terminal[700])", then gets a token for that one repository, and print
 once, run: gh-touchid session` to stderr. The repository is the one named with `-R`/`--repo` (`OWNER/REPO`,
 `github.com/OWNER/REPO` or a URL), else `GH_REPO`, else the current repository's `origin`; for Git, the repository
 in the URL. When a flag right before `-R` might take a value (as in `gh issue create --body -R`), gh-touchid reads
-which `gh` flags take values from the pinned `gh`'s `help reference`, only for such ambiguous commands.
+which `gh` flags take values from the pinned `gh`'s `help reference`, only for such ambiguous commands. If that
+cannot settle it, `as <login> gh …` is refused (an account's token is not limited to the repository in the dialog).
 
 For a repository whose owner has no App stored, `gh` and Git are refused before any Touch ID dialog, with a hint
 naming your stored accounts.

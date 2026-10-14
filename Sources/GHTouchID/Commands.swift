@@ -99,7 +99,8 @@ func runGitHub(_ arguments: [String], account: String?) throws -> Int32 {
     }
     let repository: String?
     do {
-        repository = try requestedRepository(arguments)
+        // an account's token is not limited to the repository named in the dialog: no guessing which one gh acts on
+        repository = try requestedRepository(arguments, exact: account != nil)
     } catch ToolError.missingRepository where account != nil {
         repository = nil // an account needs no repository, as in `gh api user` outside one
     }
