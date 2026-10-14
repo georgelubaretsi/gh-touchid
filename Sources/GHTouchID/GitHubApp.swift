@@ -125,13 +125,16 @@ func mintInstallationToken(repository: String, scope: TokenScope) throws -> Inst
         bearer: jwt,
         body: ["repositories": [repositoryName(repository)], "permissions": permissions]
     )
-    guard created.status == 201,
-          let token = created.object?["token"] as? String, !token.isEmpty,
-          let expiresText = created.object?["expires_at"] as? String,
-          let expires = ISO8601DateFormatter().date(from: expiresText) else {
+    guard created.status == 201 else {
         throw ToolError.github(
             "GitHub did not issue a token for \(repository) (HTTP \(created.status): \(created.message))"
         )
+    }
+    // the reply holds the token: no part of it goes into an error
+    guard let token = created.object?["token"] as? String, !token.isEmpty,
+          let expiresText = created.object?["expires_at"] as? String,
+          let expires = ISO8601DateFormatter().date(from: expiresText) else {
+        throw ToolError.github("GitHub's reply with a token for \(repository) (HTTP 201) lacks the token or its expiry")
     }
     let listed = (created.object?["repositories"] as? [[String: Any]])?.first
     return InstallationToken(token: token, expires: expires, isPrivate: listed?["private"] as? Bool)

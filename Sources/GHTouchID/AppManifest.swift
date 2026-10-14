@@ -93,11 +93,14 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
     return 0
 }
 
-/// `POST /app-manifests/{code}/conversions`, which needs no credential: the new App's settings and private key.
+/// `POST /app-manifests/{code}/conversions`, which needs no credential: the new App's settings and private key. Its
+/// reply holds the key and the App's secrets, so no part of it goes into an error.
 private func convertManifest(code: String) throws -> CreatedApp {
     let response = try githubAPI("POST", "/app-manifests/\(code)/conversions", bearer: nil)
-    guard response.status == 201,
-          let object = response.object,
+    guard response.status == 201 else {
+        throw ToolError.github("GitHub did not hand over the new App (HTTP \(response.status))")
+    }
+    guard let object = response.object,
           let id = object["id"] as? Int,
           let slug = object["slug"] as? String, validOwner(slug) != nil,
           let clientId = object["client_id"] as? String, !clientId.isEmpty,
@@ -105,7 +108,7 @@ private func convertManifest(code: String) throws -> CreatedApp {
           let owner = object["owner"] as? [String: Any],
           let login = owner["login"] as? String, validOwner(login) != nil else {
         throw ToolError.github(
-            "GitHub did not hand over the new App (HTTP \(response.status): \(response.message))"
+            "GitHub's reply with the new App (HTTP 201) lacks its ID, slug, client ID, key or owner; nothing was stored"
         )
     }
     return CreatedApp(
