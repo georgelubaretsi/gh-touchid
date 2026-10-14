@@ -131,10 +131,14 @@ func mintInstallationToken(repository: String, scope: TokenScope) throws -> Inst
         )
     }
     // the reply holds the token: no part of it goes into an error
-    guard let token = created.object?["token"] as? String, !token.isEmpty,
-          let expiresText = created.object?["expires_at"] as? String,
+    guard let token = created.object?["token"] as? String, !token.isEmpty else {
+        throw ToolError.github("GitHub's reply with a token for \(repository) (HTTP 201) lacks the token")
+    }
+    guard let expiresText = created.object?["expires_at"] as? String,
           let expires = ISO8601DateFormatter().date(from: expiresText) else {
-        throw ToolError.github("GitHub's reply with a token for \(repository) (HTTP 201) lacks the token or its expiry")
+        // unusable without its expiry: end it now rather than leave it valid for an hour
+        try? revokeInstallationToken(token)
+        throw ToolError.github("GitHub's reply with a token for \(repository) (HTTP 201) lacks its expiry")
     }
     let listed = (created.object?["repositories"] as? [[String: Any]])?.first
     return InstallationToken(token: token, expires: expires, isPrivate: listed?["private"] as? Bool)
