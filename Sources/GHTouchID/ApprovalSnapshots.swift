@@ -65,6 +65,22 @@ func renderPrompts(into directory: String) throws -> Int32 {
             folder: folder,
             started: started
         )),
+        ("session-nine", .session(
+            program: "agent",
+            repositories: (1 ... 9).map { "acme/service-\($0)" },
+            folder: folder,
+            started: started
+        )),
+        ("public-long", .publicIssue(
+            by: agent,
+            use: ghUse([
+                "issue", "create", "--title", "The install guide skips the step that sets up the cache folder",
+                "--body", (1 ... 60).map { "Line \($0) of the report: what happened, what was expected." }
+                    .joined(separator: "\n"),
+            ]),
+            repository: "acme/docs",
+            app: "acme-agent"
+        )),
         ("public-issue", .publicIssue(
             by: agent,
             use: ghUse([

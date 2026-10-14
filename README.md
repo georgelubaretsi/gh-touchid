@@ -124,9 +124,11 @@ Each Touch ID request opens a small floating window that takes the keyboard (for
 active: `gh-touchid`, "approval needed", then one fact per row: the action (`push`, `open pull request`, `store app
 key`), the repository, the branch, title or command where they apply, the program that asked and its folder (`agent ·
 ~/code/widget`), who it acts as (your App's bot or one of your accounts) and the scope (`once`, `until agent quits`, a
-duration), with the scope and any risk in orange. Touch the sensor to allow (its control sits beside what you allow,
-e.g. "allow once"), or press Esc or click **deny**; after five minutes without an answer the window closes and the
-command fails. Where no window can be shown, such as over SSH, macOS's own Touch ID sheet asks instead, in one line:
+duration), with the scope and any risk in orange. Nothing is shortened: every repository, the whole title, body (also
+one given with `--body-file`) and command are shown, and a value too tall for the window scrolls in a box that says how
+many lines it has. Touch the sensor to allow (its control sits beside what you allow, e.g. "allow once"), or press Esc
+or click **deny**; after five minutes without an answer the window closes and the command fails. Where no window can
+be shown, such as over SSH, macOS's own Touch ID sheet asks instead, in one line:
 "gh-touchid is trying to let agent run “git push” on owner/repo."
 
 ## Sessions

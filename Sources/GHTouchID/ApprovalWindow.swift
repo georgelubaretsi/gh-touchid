@@ -75,7 +75,16 @@ private final class ApprovalPanel: NSPanel {
 /// control; it is drawn at most 22 points square.
 @MainActor
 func approvalWindow(_ prompt: Prompt, touchID: NSView, deny: @escaping @MainActor () -> Void) -> NSWindow {
-    let content = NSHostingView(rootView: ApprovalView(prompt: prompt, touchID: touchID, deny: deny))
+    var content = NSHostingView(rootView: ApprovalView(prompt: prompt, touchID: touchID, deny: deny))
+    // Nothing is cut: a prompt taller than most of the screen keeps every row and lets the rows scroll.
+    let limit = (NSScreen.main?.visibleFrame.height ?? 900) * 0.8
+    if content.fittingSize.height > limit {
+        let rows = NSHostingView(rootView: RowsView(prompt: prompt)).fittingSize.height
+        let height = max(160, rows - (content.fittingSize.height - limit))
+        content = NSHostingView(
+            rootView: ApprovalView(prompt: prompt, touchID: touchID, deny: deny, rowsHeight: height)
+        )
+    }
     content.safeAreaRegions = [] // the hidden titlebar is part of the layout, not above it
     let window = ApprovalPanel(
         contentRect: .zero,
@@ -105,6 +114,8 @@ private struct ApprovalView: View {
     let prompt: Prompt
     let touchID: NSView
     let deny: @MainActor () -> Void
+    /// Set when the rows don't fit on the screen: they scroll in this height.
+    var rowsHeight: CGFloat?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -120,25 +131,12 @@ private struct ApprovalView: View {
             .padding(.horizontal, Self.margin)
             .padding(.vertical, 12)
             Divider()
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Self.margin, verticalSpacing: 9) {
-                ForEach(Array(prompt.rows.enumerated()), id: \.offset) { _, row in
-                    GridRow {
-                        Text(row.key)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                        Text(keepingNamesWhole(row.value, font: Self.valueFont(row.emphasis)))
-                            .font(.system(size: 14, weight: row.emphasis == .strong ? .semibold : .regular,
-                                          design: .monospaced))
-                            .foregroundStyle(
-                                row.emphasis == .warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary)
-                            )
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("\(row.key): \(row.value)")
-                    }
-                }
+            if let rowsHeight {
+                ScrollView(.vertical) { RowsView(prompt: prompt) }
+                    .frame(height: rowsHeight)
+            } else {
+                RowsView(prompt: prompt)
             }
-            .padding(Self.margin)
             Divider()
             HStack(spacing: 16) {
                 HStack(spacing: 8) {
@@ -172,8 +170,65 @@ private struct ApprovalView: View {
         .frame(width: Self.width)
     }
 
-    private static let width: CGFloat = 440
-    private static let margin: CGFloat = 18
+    static let width: CGFloat = 440
+    static let margin: CGFloat = 18
+}
+
+/// The prompt's rows: key on the left, the whole value on the right, wrapped and never shortened.
+private struct RowsView: View {
+    let prompt: Prompt
+
+    var body: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: ApprovalView.margin, verticalSpacing: 9) {
+            ForEach(Array(prompt.rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    Text(row.key)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    value(row)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("\(row.key): \(row.value)")
+                }
+            }
+        }
+        .padding(ApprovalView.margin)
+        .frame(width: ApprovalView.width)
+    }
+
+    /// The whole value; one taller than `tallest` (a long post, many repositories) scrolls in a box of that height,
+    /// with its line count under it, so the window stays readable and nothing is left out.
+    @ViewBuilder
+    private func value(_ row: Prompt.Row) -> some View {
+        let font = Self.valueFont(row.emphasis)
+        let text = Text(keepingNamesWhole(row.value, font: font))
+            .font(.system(size: 14, weight: row.emphasis == .strong ? .semibold : .regular, design: .monospaced))
+            .foregroundStyle(row.emphasis == .warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+            .fixedSize(horizontal: false, vertical: true)
+        let height = NSAttributedString(string: keepingNamesWhole(row.value, font: font), attributes: [.font: font])
+            .boundingRect(with: NSSize(width: valueWidth, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading])
+            .height
+        if height > Self.tallest {
+            VStack(alignment: .leading, spacing: 6) {
+                ScrollView(.vertical) {
+                    text.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: Self.tallest)
+                .scrollIndicators(.visible)
+                let lines = row.value.split(separator: "\n", omittingEmptySubsequences: false).count
+                Text("\(lines) lines · scroll to read all")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+            // the key lines up with the value's first line, not with the hint under the box
+            .alignmentGuide(.firstTextBaseline) { $0[.top] + font.ascender }
+        } else {
+            text
+        }
+    }
+
+    private static let tallest: CGFloat = 240
+
     private static let keyFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
 
     private static func valueFont(_ emphasis: Prompt.Emphasis) -> NSFont {
@@ -185,7 +240,7 @@ private struct ApprovalView: View {
         let keys = prompt.rows.map {
             NSAttributedString(string: $0.key, attributes: [.font: Self.keyFont]).size().width
         }
-        return Self.width - 3 * Self.margin - (keys.max() ?? 0)
+        return ApprovalView.width - 3 * ApprovalView.margin - (keys.max() ?? 0)
     }
 
     /// Names stay whole when a value wraps: no line break after a hyphen or a slash (U+2060 WORD JOINER) in a word

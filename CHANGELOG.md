@@ -35,8 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and ended, and elevations.
 - Touch ID dialogs are withdrawn after five minutes without an answer.
 - Touch ID asks in a small window of its own instead of macOS's sheet: one fact per row (the action, the repository,
-  the branch, title or command where they apply, the program that asked and its folder, the App's bot or your
-  account it acts as, and the scope), the scope and risks in orange, and Touch ID right in the window beside what it
+  the branch, title, body or command where they apply, the program that asked and its folder, the App's bot or your
+  account it acts as, and the scope), nothing shortened (a value too tall scrolls in its own box), the scope and risks
+  in orange, and Touch ID right in the window beside what it
   allows ("allow once"), with **deny** on Esc. The window takes the keyboard without activating gh-touchid. `app set`
   and `app create` store the App's slug with it, so the window can name the bot. Where no window can be shown, such
   as over SSH, macOS's own sheet asks in one line as before.

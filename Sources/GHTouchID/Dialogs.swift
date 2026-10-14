@@ -248,15 +248,12 @@ private func botWords(_ slug: String?, owner: String) -> String {
     "\(slug ?? "\(owner)'s app") (bot)"
 }
 
-/// One repository per line, the owner only on the first when all share it; at most six lines.
+/// One repository per line, the owner only on the first when all share it; every repository is listed.
 private func repositoryLines(_ repositories: [String]) -> String {
     let owners = Set(repositories.map(ownerAccount))
     var lines = repositories
     if owners.count == 1, repositories.count > 1 {
         lines = [repositories[0]] + repositories.dropFirst().map(repositoryName)
-    }
-    if lines.count > 6 {
-        lines = lines.prefix(5) + ["and \(lines.count - 5) more"]
     }
     return lines.joined(separator: "\n")
 }
@@ -410,24 +407,40 @@ func ghUse(_ arguments: [String]) -> Use {
     let rest = arguments.indices.filter { !words.contains($0) }.map { shellQuoted(arguments[$0]) }
     var use = Use(
         command: command,
-        commandLine: shortened((["gh"] + words.map { arguments[$0] } + rest).joined(separator: " "))
+        commandLine: printable((["gh"] + words.map { arguments[$0] } + rest).joined(separator: " "), limit: .max)
     )
     guard ["gh pr create", "gh issue create", "gh issue comment", "gh pr comment"].contains(command) else {
         return use
     }
     let options = arguments.prefix { $0 != "--" }
-    use.title = textOption(options, long: "title", short: "t").map { shortened($0, limit: 100) }
+    // shown whole: for a post, what gets posted is the point of asking
+    use.title = textOption(options, long: "title", short: "t").map { printable($0, limit: .max) }
     if let file = textOption(options, long: "body-file", short: "F") {
-        use.body = "from \(shortened(file))"
+        use.body = bodyFile(file)
     } else if let body = textOption(options, long: "body", short: "b") {
-        let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
-        var shown = lines.prefix(3).map { shortened(String($0), limit: 80) }
-        if lines.count > 3, let last = shown.popLast() {
-            shown.append(last + " …")
-        }
-        use.body = shown.joined(separator: "\n")
+        use.body = multiline(body)
     }
     return use
+}
+
+/// The text of a `--body-file` as gh will read it, relative to the current folder; `-` is standard input, which
+/// gh-touchid can't read without taking it from gh.
+private func bodyFile(_ path: String) -> String {
+    guard path != "-" else {
+        return "(from standard input, not shown)"
+    }
+    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+    guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else {
+        return "(from \(printable(path)), which can't be read)"
+    }
+    return multiline(text)
+}
+
+/// Every line of `text`, each made printable, line breaks kept.
+private func multiline(_ text: String) -> String {
+    text.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { printable(String($0), limit: .max) }
+        .joined(separator: "\n")
 }
 
 /// The value of the last `--<long> v`, `--<long>=v`, `-<short> v` or `-<short>v` in `arguments`.
