@@ -292,9 +292,11 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   use asks for Touch ID and names the command, the repository and who asked, and the token goes only to the `gh`
   that gh-touchid starts or to Git's transport.
 - The App keys and your accounts' tokens are generic passwords in your login Keychain, available only while this Mac
-  is unlocked and never synced. `status`, the hint and the checks before a dialog read only which items exist. This build is not signed with the hardened runtime, so the protection is enforced by
-  gh-touchid itself: it asks for Touch ID or checks the session before using them, but macOS lets a process read
-  the items once you allow it in the Keychain dialog or with your account password.
+  is unlocked and never synced. `status`, the hint and the checks before a dialog read only which items exist and the
+  App's name (its slug, kept in the item's comment), never a secret. This build is not signed with the hardened
+  runtime, so the protection is enforced by gh-touchid itself: it asks for Touch ID or checks the session before using
+  them, but macOS lets a process read the items once you allow it in the Keychain dialog or with your account
+  password.
 - Everything inside an approved session shares its access: any process the session's root starts, at any depth, gets
   tokens for the session's repositories without Touch ID until the root exits, and can open issues on (and read)
   every private repository your Apps are installed on. Approve sessions for programs you trust, with the

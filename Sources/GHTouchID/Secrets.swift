@@ -3,10 +3,11 @@ import Foundation
 import Security
 
 // Secrets live in the login Keychain as generic passwords (test builds: in files under GH_TOUCHID_TEST_DIR).
-// - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, privateKey}
+// - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, privateKey},
+//   and its slug as the item's comment (none for Apps stored by earlier versions)
 // - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`
 // Accounts are lowercase. Items of gh-touchid 0.2 (service `com.lubaretsi.gh-touchid`) are no longer read.
-// Listing and existence checks read attributes only, never a secret.
+// Listing, existence checks and the App's slug read attributes only, never a secret.
 
 private let appService = "com.lubaretsi.gh-touchid.app"
 private let userService = "com.lubaretsi.gh-touchid.user"
@@ -16,9 +17,11 @@ struct AppCredentials: Codable {
     let privateKey: String
 }
 
-func storeAppCredentials(_ credentials: AppCredentials, owner: String) throws {
+/// Stores the owner's App; `slug` (from GitHub) is what the approval window calls it.
+func storeAppCredentials(_ credentials: AppCredentials, owner: String, slug: String?) throws {
     let data = try JSONEncoder().encode(credentials)
-    try storeSecret(data, service: appService, account: owner, label: "gh-touchid App for \(owner)")
+    let label = "gh-touchid App for \(owner)"
+    try storeSecret(data, service: appService, account: owner, label: label, comment: slug ?? "")
 }
 
 func loadAppCredentials(owner: String) throws -> AppCredentials {
@@ -35,13 +38,19 @@ func hasAppCredentials(owner: String) -> Bool {
     hasSecret(service: appService, account: owner)
 }
 
+/// The slug of the owner's stored App, read from its attributes; nil when it was stored without one.
+func appSlug(owner: String) -> String? {
+    secretComment(service: appService, account: owner).flatMap(validOwner)
+}
+
 /// Owners with a stored App.
 func storedAppOwners() throws -> [String] {
     try storedAccounts(service: appService)
 }
 
 func storeUserToken(_ token: String, login: String) throws {
-    try storeSecret(Data(token.utf8), service: userService, account: login, label: "gh-touchid account \(login)")
+    let label = "gh-touchid account \(login)"
+    try storeSecret(Data(token.utf8), service: userService, account: login, label: label, comment: nil)
 }
 
 func loadUserToken(login: String) throws -> String {
@@ -78,15 +87,25 @@ private func secretPath(service: String, account: String) -> String {
     (serviceDirectory(service) as NSString).appendingPathComponent(account)
 }
 
-private func storeSecret(_ data: Data, service: String, account: String, label _: String) throws {
-    let path = secretPath(service: service, account: account)
-    try FileManager.default.createDirectory(
-        atPath: (path as NSString).deletingLastPathComponent,
-        withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700]
-    )
-    guard FileManager.default.createFile(atPath: path, contents: data, attributes: [.posixPermissions: 0o600]) else {
-        throw ToolError.keychain("cannot write \(path)")
+private func commentPath(service: String, account: String) -> String {
+    (testDirectory as NSString).appendingPathComponent("comments/\(service)/\(account)")
+}
+
+private func storeSecret(_ data: Data, service: String, account: String, label _: String, comment: String?) throws {
+    for (path, contents) in [(secretPath(service: service, account: account), data),
+                             (commentPath(service: service, account: account), comment.map { Data($0.utf8) })] {
+        guard let contents else {
+            continue
+        }
+        try FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
+        guard FileManager.default.createFile(atPath: path, contents: contents, attributes: attributes) else {
+            throw ToolError.keychain("cannot write \(path)")
+        }
     }
 }
 
@@ -98,12 +117,18 @@ private func hasSecret(service: String, account: String) -> Bool {
     FileManager.default.fileExists(atPath: secretPath(service: service, account: account))
 }
 
+private func secretComment(service: String, account: String) -> String? {
+    FileManager.default.contents(atPath: commentPath(service: service, account: account))
+        .map { String(decoding: $0, as: UTF8.self) }
+}
+
 private func deleteSecret(service: String, account: String) throws -> Bool {
     let path = secretPath(service: service, account: account)
     guard FileManager.default.fileExists(atPath: path) else {
         return false
     }
     try FileManager.default.removeItem(atPath: path)
+    try? FileManager.default.removeItem(atPath: commentPath(service: service, account: account))
     return true
 }
 
@@ -120,17 +145,19 @@ private func keychainError(_ status: OSStatus) -> String {
     return "OSStatus \(status)"
 }
 
-private func storeSecret(_ data: Data, service: String, account: String, label: String) throws {
+/// Stores the item's data and label, and its comment unless `comment` is nil.
+private func storeSecret(_ data: Data, service: String, account: String, label: String, comment: String?) throws {
     let lookup: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
     ]
 
-    let update: [String: Any] = [
+    var update: [String: Any] = [
         kSecValueData as String: data,
         kSecAttrLabel as String: label,
     ]
+    update[kSecAttrComment as String] = comment
 
     let updateStatus = SecItemUpdate(lookup as CFDictionary, update as CFDictionary)
     if updateStatus == errSecSuccess {
@@ -140,9 +167,7 @@ private func storeSecret(_ data: Data, service: String, account: String, label: 
         throw ToolError.keychain(keychainError(updateStatus))
     }
 
-    var add = lookup
-    add[kSecValueData as String] = data
-    add[kSecAttrLabel as String] = label
+    var add = lookup.merging(update) { $1 }
     add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
     add[kSecAttrSynchronizable as String] = false
 
@@ -187,6 +212,22 @@ private func hasSecret(service: String, account: String) -> Bool {
     ]
     var item: CFTypeRef?
     return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
+}
+
+/// The item's comment, from its attributes; nil when there is no item or no comment.
+private func secretComment(service: String, account: String) -> String? {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecAttrAccount as String: account,
+        kSecReturnAttributes as String: true,
+        kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var item: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else {
+        return nil
+    }
+    return (item as? [String: Any])?[kSecAttrComment as String] as? String
 }
 
 private func deleteSecret(service: String, account: String) throws -> Bool {

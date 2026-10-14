@@ -90,8 +90,8 @@ private func setApp(owner: String, _ arguments: [String]) throws -> Int32 {
     let key = try rsaPrivateKey(pem: pem)
     try authenticate(.appKey(owner: owner))
     let app = try verifyAppKey(clientId: clientId, key: key)
-    try storeAppCredentials(AppCredentials(clientId: clientId, privateKey: pem), owner: owner)
-    fputs("Stored the key of the GitHub App \(app) for \(owner); GitHub accepted it.\n", stderr)
+    try storeAppCredentials(AppCredentials(clientId: clientId, privateKey: pem), owner: owner, slug: app.slug)
+    fputs("Stored the key of the GitHub App \(app.name) for \(owner); GitHub accepted it.\n", stderr)
     return 0
 }
 

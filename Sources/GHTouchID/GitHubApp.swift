@@ -70,8 +70,9 @@ private func appJWT(clientId: String, key: SecKey) throws -> String {
     return signingInput + "." + base64URL(signature)
 }
 
-/// Checks the App's key with GitHub (`GET /app`) and returns the App's name.
-func verifyAppKey(clientId: String, key: SecKey) throws -> String {
+/// Checks the App's key with GitHub (`GET /app`) and returns the App's slug (nil when the reply lacks a valid one) and
+/// its name for messages.
+func verifyAppKey(clientId: String, key: SecKey) throws -> (slug: String?, name: String) {
     let response = try githubAPI("GET", "/app", bearer: appJWT(clientId: clientId, key: key))
     guard response.status == 200 else {
         throw ToolError.github(
@@ -80,7 +81,8 @@ func verifyAppKey(clientId: String, key: SecKey) throws -> String {
         )
     }
     let object = response.object
-    return (object?["slug"] as? String) ?? (object?["name"] as? String) ?? "GitHub"
+    let slug = object?["slug"] as? String
+    return (slug.flatMap(validOwner), slug ?? (object?["name"] as? String) ?? "GitHub")
 }
 
 /// What a token may do: the installation's permissions (without `workflows` unless the repository is elevated), or

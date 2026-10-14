@@ -80,7 +80,7 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
     let key = try rsaPrivateKey(pem: app.pem)
     try authenticate(.newApp(app.slug, owner: owner))
     _ = try verifyAppKey(clientId: app.clientId, key: key)
-    try storeAppCredentials(AppCredentials(clientId: app.clientId, privateKey: app.pem), owner: owner)
+    try storeAppCredentials(AppCredentials(clientId: app.clientId, privateKey: app.pem), owner: owner, slug: app.slug)
     let install = "\(web)/apps/\(app.slug)/installations/new"
     fputs(
         "Stored the GitHub App \(app.slug) (ID \(app.id)) for \(owner); GitHub accepted its key.\n"
