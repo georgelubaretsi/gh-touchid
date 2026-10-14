@@ -37,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** without a session, every `gh` and Git use asks for Touch ID naming the command and the processes
-  that asked, and gets an App token instead of a stored token.
+- **Breaking:** without a session, every `gh` and Git use asks for Touch ID and gets an App token instead of a
+  stored token. Dialogs name the program that asked, the command and the repository in plain words ("let omp run
+  “git push” on owner/repo"); the full process chain goes to the access log.
 - **Breaking:** `gh` and Git refuse, before any Touch ID dialog, repositories whose owner has no App stored, and
   name your stored accounts to act as instead.
 - **Breaking:** the Git credential helper answers only Git's HTTPS transport, so `git credential fill` gets nothing;

@@ -43,12 +43,6 @@ func parseDuration(_ text: String) throws -> TimeInterval {
     return seconds
 }
 
-func durationText(_ seconds: TimeInterval) -> String {
-    let minutes = Int(seconds / 60)
-    let parts = [(minutes / 1440, "d"), (minutes % 1440 / 60, "h"), (minutes % 60, "m")]
-    return parts.filter { $0.0 > 0 }.map { "\($0.0)\($0.1)" }.joined()
-}
-
 func localTime(_ date: Date) -> String {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -59,11 +53,6 @@ func clockTime(_ date: Date) -> String {
     let formatter = DateFormatter()
     formatter.dateFormat = "HH:mm"
     return formatter.string(from: date)
-}
-
-func repositoryList(_ repositories: [String]) -> String {
-    let shown = repositories.prefix(3).joined(separator: ", ")
-    return repositories.count > 3 ? "\(shown) and \(repositories.count - 3) more" : shown
 }
 
 /// A path with the home directory shown as `~`.
@@ -78,7 +67,7 @@ func displayFolder(_ path: String) -> String {
     return path
 }
 
-/// One line of at most 180 characters, for dialogs and the log.
+/// One line of at most 180 characters, for the log.
 func commandSummary(_ arguments: [String]) -> String {
     let summary = arguments
         .joined(separator: " ")

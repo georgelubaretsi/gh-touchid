@@ -84,7 +84,7 @@ struct Authorization {
     /// nil only when acting as an account and no repository could be told.
     let repository: String?
     let grant: Grant
-    /// What asked, for dialogs: a gh command line or `Git over HTTPS`.
+    /// What asked, in dialog words: `gh pr list`, `git push`.
     let command: String
     let forGit: Bool
     let chain: String
@@ -106,9 +106,8 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
             guard hasUserToken(login: account) else {
                 throw ToolError.missingAccount(account)
             }
-            try authenticate(
-                reason: "act as \(account): \(command) on \(target) (asked by \(processChain(getppid())))"
-            )
+            let on = repository.map { " on \($0)" } ?? ""
+            try authenticate(reason: "let \(requester()) act as \(account): “\(command)”\(on)")
             return authorized(.account(account))
         }
         guard let repository else {
@@ -130,9 +129,7 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
         fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
-        try authenticate(
-            reason: "use GitHub for \(repository): \(command) (asked by \(processChain(getppid())))"
-        )
+        try authenticate(reason: "let \(requester()) run “\(command)” on \(repository)")
         return authorized(.app(session: nil))
     } catch {
         appendAccessLog("refused \(target) to \(chain): \(error)")
@@ -195,10 +192,7 @@ private func issueOnlyCredential(
                 "\(repository) is public and outside the session; Git reads it without a credential"
             )
         }
-        try authenticate(
-            reason: "let \(session.program) open issues on public \(repository): \(authorization.command) "
-                + "(asked by \(processChain(getppid())))"
-        )
+        try authenticate(reason: "let \(session.program) run “\(authorization.command)” on public \(repository)")
     } catch {
         revokeAfterUse(credential, repository: repository)
         throw error
@@ -214,9 +208,9 @@ private func awaitApproval(of session: SessionInfo) throws {
         return
     }
     if reply?["lease"] as? Bool == true {
-        let reason = "let \(session.program) in \(displayFolder(session.folder)) "
-            + "(started \(clockTime(session.started))) use GitHub for "
-            + "\(repositoryList(session.repositories)) until it exits, and open issues on your other repositories"
+        let reason = "let \(session.program) use \(repositoryWords(session.repositories)) until it quits, "
+            + "and open issues in your other repos (started \(clockTime(session.started)) "
+            + "in \(displayFolder(session.folder)))"
         do {
             try authenticate(reason: reason)
         } catch {
