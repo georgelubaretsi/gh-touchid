@@ -4,7 +4,7 @@ enum ToolError: Error, CustomStringConvertible {
     case authenticationNotAnswered
     case keychain(String)
     case missingRepository
-    case missingOwnToken(String)
+    case missingAccount(String)
     case missingApp(String)
     case invalidToken
     case forbiddenCommand
@@ -28,8 +28,8 @@ enum ToolError: Error, CustomStringConvertible {
             return "Keychain error: \(message)"
         case .missingRepository:
             return "current Git repository must have an origin on github.com"
-        case let .missingOwnToken(owner):
-            return "no token of yours is stored for \(owner); run `gh-touchid set --owner \(owner)` first"
+        case let .missingAccount(login):
+            return "no token is stored for the account \(login); run `gh-touchid user add \(login)` first"
         case let .missingApp(owner):
             return "no GitHub App is stored for \(owner); run `gh-touchid app set \(owner) --client-id <id> < key.pem` first"
         case .invalidToken:

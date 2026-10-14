@@ -14,14 +14,14 @@ func run() throws -> Int32 {
         return 0
     case "app":
         return try setApp(rest)
-    case "set":
-        return try setOwnToken(rest)
+    case "user":
+        return try userCommand(rest)
     case "gh":
-        return try runGitHub(rest, asOwner: actingAsOwner())
+        return try runGitHub(rest, account: actingAccount())
     case "git-credential":
         return try gitCredential(rest)
-    case "me":
-        return try runAsOwner(rest)
+    case "as":
+        return try runAs(rest)
     case "session":
         return try registerSession(rest)
     case "elevate":
@@ -30,7 +30,7 @@ func run() throws -> Int32 {
         guard rest.isEmpty else {
             throw ToolError.usage
         }
-        return showStatus()
+        return try showStatus()
     case "lock":
         guard rest.isEmpty else {
             throw ToolError.usage
@@ -71,65 +71,35 @@ private func setApp(_ arguments: [String]) throws -> Int32 {
     return 0
 }
 
-/// `set [--owner <owner>]`: your own token, used by `me`.
-private func setOwnToken(_ arguments: [String]) throws -> Int32 {
-    let options = try parseOptions(arguments, allowed: ["--owner"])
-    let owner: String
-    if let values = options["--owner"] {
-        guard values.count == 1, let valid = validOwner(values[0]) else {
-            throw ToolError.input("--owner takes one GitHub account name")
-        }
-        owner = valid
-    } else {
-        owner = ownerAccount(try repositoryIdentifier())
-    }
-    try authenticate(reason: "store your own GitHub token for \(owner)")
-    let token = try readToken()
-    try storeOwnToken(token, owner: owner)
-    fputs("Stored your GitHub token for \(owner).\n", stderr)
-    return 0
-}
-
-private func runGitHub(_ arguments: [String], asOwner: Bool) throws -> Int32 {
+/// gh with a token from the owner's App, or with the token of `account`.
+func runGitHub(_ arguments: [String], account: String?) throws -> Int32 {
     guard !isForbiddenGitHubCommand(arguments) else {
         let command = commandSummary(["gh"] + arguments.prefix(2))
         appendAccessLog("refused \(command) to \(processChain(getpid())): \(ToolError.forbiddenCommand)")
         throw ToolError.forbiddenCommand
     }
-    let repository = try requestedRepository(arguments)
+    let repository: String?
+    do {
+        repository = try requestedRepository(arguments)
+    } catch ToolError.missingRepository where account != nil {
+        repository = nil // an account needs no repository, as in `gh api user` outside one
+    }
     let cli = try gitHubCLI()
     let authorization = try authorizeUse(
         repository: repository,
         command: commandSummary(["gh"] + arguments),
-        asOwner: asOwner
+        account: account
     )
     // from the mint until the revoke, a signal is remembered or passed on to gh instead of ending gh-touchid
     let relay = SignalRelay()
     defer { relay.remove() }
     let credential = try issueCredential(authorization)
-    defer { revokeAfterUse(credential, repository: repository) }
+    defer { revokeAfterUse(credential, repository: authorization.target) }
     if let number = relay.received {
         fputs("gh-touchid: stopped by signal \(number) before gh started\n", stderr)
         return 128 + number
     }
     return try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay)
-}
-
-/// `me gh …` runs gh with your own token; `me <command> …` runs the command with GH_TOUCHID_AS=me.
-private func runAsOwner(_ arguments: [String]) throws -> Int32 {
-    guard let program = arguments.first else {
-        throw ToolError.usage
-    }
-    if program == "gh" {
-        return try runGitHub(Array(arguments.dropFirst()), asOwner: true)
-    }
-    setenv("GH_TOUCHID_AS", "me", 1)
-    fflush(stdout)
-    var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
-    execvp(program, &argv)
-    let reason = String(cString: strerror(errno))
-    argv.forEach { free($0) }
-    throw ToolError.input("cannot run \(program): \(reason)")
 }
 
 /// Git's credential-helper protocol; only Git's HTTP transport is answered.
@@ -150,22 +120,27 @@ private func gitCredential(_ arguments: [String]) throws -> Int32 {
         guard isGitHubCredentialRequest(protocol: request["protocol"], host: request["host"]) else {
             return 0
         }
-        let repository: String
+        let account = try actingAccount()
+        let repository: String?
         if let path = request["path"], !path.isEmpty {
             guard let named = validRepository(path) else {
                 throw ToolError.input("cannot tell the GitHub repository from the path \(printable(path))")
             }
             repository = named
         } else {
-            repository = try repositoryIdentifier()
+            do {
+                repository = try repositoryIdentifier()
+            } catch ToolError.missingRepository where account != nil {
+                repository = nil
+            }
         }
         let authorization = try authorizeUse(
             repository: repository,
             command: "Git over HTTPS",
-            asOwner: actingAsOwner()
+            account: account
         )
         let credential = try issueCredential(authorization)
-        var lines = ["username=x-access-token", "password=\(credential.token)"]
+        var lines = ["username=\(credential.username)", "password=\(credential.token)"]
         if let expires = credential.expires {
             lines.append("password_expiry_utc=\(Int(expires.timeIntervalSince1970))")
         }
@@ -252,7 +227,12 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
     return 0
 }
 
-private func showStatus() -> Int32 {
+/// Stored Apps and accounts (names only, no secret is read), then sessions and elevations.
+private func showStatus() throws -> Int32 {
+    let owners = try storedAppOwners()
+    let logins = try storedUserLogins()
+    print("Apps (owners): \(owners.isEmpty ? "none" : owners.joined(separator: ", "))")
+    print("Accounts: \(logins.isEmpty ? "none" : logins.joined(separator: ", "))")
     let reply = agentRequest(["op": "status"])
     let sessions = (reply?["sessions"] as? [Any] ?? []).compactMap(SessionInfo.init)
     let elevations = reply?["elevations"] as? [[String: Any]] ?? []

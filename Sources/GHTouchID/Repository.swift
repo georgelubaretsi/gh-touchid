@@ -62,7 +62,7 @@ func validOwner(_ raw: String) -> String? {
     return raw.lowercased()
 }
 
-/// The lowercase owner of `owner/name`: the account under which its App and own token are stored.
+/// The lowercase owner of `owner/name`: the account under which its App is stored.
 func ownerAccount(_ repository: String) -> String {
     String(repository.split(separator: "/")[0]).lowercased()
 }

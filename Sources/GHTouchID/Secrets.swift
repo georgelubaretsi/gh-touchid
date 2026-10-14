@@ -4,11 +4,12 @@ import Security
 
 // Secrets live in the login Keychain as generic passwords (test builds: in files under GH_TOUCHID_TEST_DIR).
 // - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, privateKey}
-// - service `com.lubaretsi.gh-touchid`, account = owner: the owner's own token, used by `me`
-// Accounts are lowercase owners. Items of gh-touchid 0.2 used `owner/repo` accounts; nothing reads them any more.
+// - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`
+// Accounts are lowercase. Items of gh-touchid 0.2 (service `com.lubaretsi.gh-touchid`) are no longer read.
+// Listing and existence checks read attributes only, never a secret.
 
-private let ownTokenService = "com.lubaretsi.gh-touchid"
 private let appService = "com.lubaretsi.gh-touchid.app"
+private let userService = "com.lubaretsi.gh-touchid.user"
 
 struct AppCredentials: Codable {
     let clientId: String
@@ -30,25 +31,51 @@ func loadAppCredentials(owner: String) throws -> AppCredentials {
     return credentials
 }
 
-func storeOwnToken(_ token: String, owner: String) throws {
-    try storeSecret(Data(token.utf8), service: ownTokenService, account: owner, label: "gh-touchid \(owner)")
+func hasAppCredentials(owner: String) -> Bool {
+    hasSecret(service: appService, account: owner)
 }
 
-func loadOwnToken(owner: String) throws -> String {
-    guard let data = try loadSecret(service: ownTokenService, account: owner) else {
-        throw ToolError.missingOwnToken(owner)
+/// Owners with a stored App.
+func storedAppOwners() throws -> [String] {
+    try storedAccounts(service: appService)
+}
+
+func storeUserToken(_ token: String, login: String) throws {
+    try storeSecret(Data(token.utf8), service: userService, account: login, label: "gh-touchid account \(login)")
+}
+
+func loadUserToken(login: String) throws -> String {
+    guard let data = try loadSecret(service: userService, account: login) else {
+        throw ToolError.missingAccount(login)
     }
     guard let token = String(data: data, encoding: .utf8), !token.isEmpty else {
-        throw ToolError.keychain("the stored token for \(owner) is not valid UTF-8")
+        throw ToolError.keychain("the stored token for \(login) is not valid UTF-8")
     }
     return token
 }
 
+func hasUserToken(login: String) -> Bool {
+    hasSecret(service: userService, account: login)
+}
+
+/// Removes the token of `login`; false when none was stored.
+func removeUserToken(login: String) throws -> Bool {
+    try deleteSecret(service: userService, account: login)
+}
+
+/// Logins of your accounts with a stored token.
+func storedUserLogins() throws -> [String] {
+    try storedAccounts(service: userService)
+}
+
 #if GH_TOUCHID_TESTING
 
+private func serviceDirectory(_ service: String) -> String {
+    (testDirectory as NSString).appendingPathComponent("secrets/\(service)")
+}
+
 private func secretPath(service: String, account: String) -> String {
-    ((testDirectory as NSString).appendingPathComponent("secrets/\(service)") as NSString)
-        .appendingPathComponent(account)
+    (serviceDirectory(service) as NSString).appendingPathComponent(account)
 }
 
 private func storeSecret(_ data: Data, service: String, account: String, label _: String) throws {
@@ -65,6 +92,23 @@ private func storeSecret(_ data: Data, service: String, account: String, label _
 
 private func loadSecret(service: String, account: String) throws -> Data? {
     FileManager.default.contents(atPath: secretPath(service: service, account: account))
+}
+
+private func hasSecret(service: String, account: String) -> Bool {
+    FileManager.default.fileExists(atPath: secretPath(service: service, account: account))
+}
+
+private func deleteSecret(service: String, account: String) throws -> Bool {
+    let path = secretPath(service: service, account: account)
+    guard FileManager.default.fileExists(atPath: path) else {
+        return false
+    }
+    try FileManager.default.removeItem(atPath: path)
+    return true
+}
+
+private func storedAccounts(service: String) throws -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: serviceDirectory(service))) ?? []).sorted()
 }
 
 #else
@@ -130,6 +174,55 @@ private func loadSecret(service: String, account: String) throws -> Data? {
         throw ToolError.keychain("the item for \(account) has no data")
     }
     return data
+}
+
+/// Whether the item exists; reads its attributes, not its data, so the Keychain does not ask to reveal it.
+private func hasSecret(service: String, account: String) -> Bool {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecAttrAccount as String: account,
+        kSecReturnAttributes as String: true,
+        kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var item: CFTypeRef?
+    return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
+}
+
+private func deleteSecret(service: String, account: String) throws -> Bool {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecAttrAccount as String: account,
+    ]
+    let status = SecItemDelete(query as CFDictionary)
+    if status == errSecItemNotFound {
+        return false
+    }
+    guard status == errSecSuccess else {
+        throw ToolError.keychain(keychainError(status))
+    }
+    return true
+}
+
+/// The accounts of every item of `service`, from their attributes.
+private func storedAccounts(service: String) throws -> [String] {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecReturnAttributes as String: true,
+        kSecMatchLimit as String: kSecMatchLimitAll,
+    ]
+    var items: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &items)
+    if status == errSecItemNotFound {
+        return []
+    }
+    guard status == errSecSuccess else {
+        throw ToolError.keychain(keychainError(status))
+    }
+    let attributes = items as? [[String: Any]] ?? []
+    return attributes.compactMap { $0[kSecAttrAccount as String] as? String }.sorted()
 }
 
 #endif

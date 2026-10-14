@@ -2,7 +2,8 @@ import Darwin
 import Foundation
 
 // Who gets a token for repository R, decided by the client that needs it:
-// 1. GH_TOUCHID_AS=me: Touch ID for this use, then your own token for R's owner.
+// 1. Acting as one of your accounts (`as <login>`, GH_TOUCHID_AS=<login>): Touch ID for every use, sessions or not,
+//    then that account's token.
 // 2. Inside an approved session that lists R: a token from the App without Touch ID.
 // 3. Inside a pending session that lists R: one Touch ID approves the session, then as 2.
 // 4. Anything else: Touch ID naming the command and who asked, then one token from the App.
@@ -11,7 +12,9 @@ import Foundation
 
 struct GitHubCredential {
     let token: String
-    /// When an App token expires; nil for your own token, which is neither revoked nor expires here.
+    /// What Git sends as the username with it.
+    let username: String
+    /// When an App token expires; nil for an account's token, which is neither revoked nor expires here.
     let expires: Date?
 }
 
@@ -52,73 +55,96 @@ struct SessionInfo {
     }
 }
 
-/// Whether the caller asked to act as you (GH_TOUCHID_AS=me) rather than as the owner's App.
-func actingAsOwner() throws -> Bool {
+/// The account GH_TOUCHID_AS names, if any.
+func actingAccount() throws -> String? {
     guard let value = ProcessInfo.processInfo.environment["GH_TOUCHID_AS"], !value.isEmpty else {
-        return false
+        return nil
     }
-    guard value == "me" else {
-        throw ToolError.input("GH_TOUCHID_AS takes only `me`")
+    guard let login = validOwner(value) else {
+        throw ToolError.input("GH_TOUCHID_AS takes the login of one of your GitHub accounts")
     }
-    return true
+    return login
 }
 
-/// A use of a repository that Touch ID or a session allowed; the token is issued separately, right after.
+/// How an authorized use gets its token.
+enum Grant {
+    /// The token of one of your accounts.
+    case account(String)
+    /// A token from the App: for a session that lists the repository, or (no session) once after Touch ID.
+    case app(session: SessionInfo?)
+}
+
+/// A use that Touch ID or a session allowed; the token is issued separately, right after.
 struct Authorization {
-    let repository: String
-    let asOwner: Bool
-    /// `you`, `session prog[pid]` or `once`, for the log.
-    let grant: String
+    /// nil only when acting as an account and no repository could be told.
+    let repository: String?
+    let grant: Grant
     let chain: String
+
+    var target: String {
+        repository ?? "no repository"
+    }
 }
 
-/// Touch ID or session approval for one use of `repository` by `command` (shown in Touch ID dialogs).
-func authorizeUse(repository: String, command: String, asOwner: Bool) throws -> Authorization {
+/// Touch ID or session approval for one use of `repository` by `command`, as `account` when one is given.
+func authorizeUse(repository: String?, command: String, account: String?) throws -> Authorization {
     let chain = processChain(getpid())
+    let target = repository ?? "no repository"
+    func authorized(_ grant: Grant) -> Authorization {
+        Authorization(repository: repository, grant: grant, chain: chain)
+    }
     do {
-        if asOwner {
-            try authenticate(reason: "run \(command) as you on \(repository)")
-            return Authorization(repository: repository, asOwner: true, grant: "you", chain: chain)
+        if let account {
+            guard hasUserToken(login: account) else {
+                throw ToolError.missingAccount(account)
+            }
+            try authenticate(
+                reason: "act as \(account): \(command) on \(target) (asked by \(processChain(getppid())))"
+            )
+            return authorized(.account(account))
         }
-
-        let grant: String
+        guard let repository else {
+            throw ToolError.missingRepository
+        }
         let reply = agentRequest(["op": "check", "repo": repository])
         if let session = SessionInfo(reply?["session"]), reply?["covers"] as? Bool == true {
             if !session.approved {
                 try awaitApproval(of: session)
             }
-            grant = "session \(session.label)"
-        } else {
-            try authenticate(
-                reason: "use GitHub for \(repository): \(command) (asked by \(processChain(getppid())))"
-            )
-            grant = "once"
+            return authorized(.app(session: session))
         }
-        return Authorization(repository: repository, asOwner: false, grant: grant, chain: chain)
+        try authenticate(
+            reason: "use GitHub for \(repository): \(command) (asked by \(processChain(getppid())))"
+        )
+        return authorized(.app(session: nil))
     } catch {
-        appendAccessLog("refused \(repository) to \(chain): \(error)")
+        appendAccessLog("refused \(target) to \(chain): \(error)")
         throw error
     }
 }
 
-/// The token for an authorized use: your own, or a new one from the App.
+/// The token for an authorized use: an account's own, or a new one from the App.
 func issueCredential(_ authorization: Authorization) throws -> GitHubCredential {
-    let repository = authorization.repository
+    let chain = authorization.chain
     do {
-        if authorization.asOwner {
-            let token = try loadOwnToken(owner: ownerAccount(repository))
-            appendAccessLog("granted \(repository) (you) to \(authorization.chain)")
-            return GitHubCredential(token: token, expires: nil)
+        switch authorization.grant {
+        case let .account(login):
+            let token = try loadUserToken(login: login)
+            appendAccessLog("granted \(authorization.target) (as \(login)) to \(chain)")
+            return GitHubCredential(token: token, username: login, expires: nil)
+        case let .app(session):
+            guard let repository = authorization.repository else {
+                throw ToolError.missingRepository
+            }
+            // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
+            let elevated = agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true
+            let token = try mintInstallationToken(repository: repository, includeWorkflows: elevated)
+            let grant = session.map { "session \($0.label)" } ?? "once"
+            appendAccessLog("granted \(repository) (\(grant))\(elevated ? ", elevated" : "") to \(chain)")
+            return GitHubCredential(token: token.token, username: "x-access-token", expires: token.expires)
         }
-        // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
-        let elevated = agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true
-        let token = try mintInstallationToken(repository: repository, includeWorkflows: elevated)
-        appendAccessLog(
-            "granted \(repository) (\(authorization.grant))\(elevated ? ", elevated" : "") to \(authorization.chain)"
-        )
-        return GitHubCredential(token: token.token, expires: token.expires)
     } catch {
-        appendAccessLog("refused \(repository) to \(authorization.chain): \(error)")
+        appendAccessLog("refused \(authorization.target) to \(chain): \(error)")
         throw error
     }
 }
