@@ -34,12 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The access log records every use, granted or refused, with the process chain, plus sessions registered, approved
   and ended, and elevations.
 - Touch ID dialogs are withdrawn after five minutes without an answer.
+- Touch ID asks in a window of its own instead of macOS's small sheet: the icon of the app the request came from, a
+  plain question ("Allow omp to push to owner/repo?"), one sentence on what allowing means, the command or folder,
+  **Deny** (or Esc), and Touch ID right in the window. Where no window can be shown, such as over SSH, macOS's own
+  sheet asks in one line as before.
 
 ### Changed
 
 - **Breaking:** without a session, every `gh` and Git use asks for Touch ID and gets an App token instead of a
-  stored token. Dialogs name the program that asked, the command and the repository in plain words ("let omp run
-  “git push” on owner/repo"); the full process chain goes to the access log.
+  stored token. Dialogs name the program that asked, the command and the repository in plain words ("Allow omp to
+  push to owner/repo?"); the full process chain goes to the access log.
 - **Breaking:** `gh` and Git refuse, before any Touch ID dialog, repositories whose owner has no App stored, and
   name your stored accounts to act as instead.
 - **Breaking:** the Git credential helper answers only Git's HTTPS transport, so `git credential fill` gets nothing;

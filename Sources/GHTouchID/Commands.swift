@@ -2,6 +2,11 @@ import Darwin
 import Foundation
 
 func run() throws -> Int32 {
+#if GH_TOUCHID_TESTING
+    if let directory = ProcessInfo.processInfo.environment["GH_TOUCHID_TEST_RENDER"] {
+        return try renderPrompts(into: directory)
+    }
+#endif
     let arguments = Array(CommandLine.arguments.dropFirst())
     guard let command = arguments.first else {
         throw ToolError.usage

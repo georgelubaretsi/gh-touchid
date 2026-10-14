@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LocalAuthentication
 
@@ -9,8 +10,8 @@ private final class AuthenticationResult: @unchecked Sendable {
     var error: Error?
 }
 
-/// Touch ID for `prompt`, in macOS's own sheet: "gh-touchid is trying to <fallback>." Test builds print
-/// `AUTH: <fallback>` instead.
+/// Touch ID for `prompt`: in the approval window, or in macOS's own sheet (with `prompt.fallback`) where no window
+/// can be shown. Test builds print `AUTH: <fallback>` instead and never show either.
 func authenticate(_ prompt: Prompt) throws {
 #if GH_TOUCHID_TESTING
     let environment = ProcessInfo.processInfo.environment
@@ -36,12 +37,40 @@ func authenticate(_ prompt: Prompt) throws {
         )
     }
 
+    if Thread.isMainThread, isOnConsole() {
+        let shown = try MainActor.assumeIsolated {
+            // false when AppKit cannot start, e.g. without a connection to the window server
+            guard NSApplication.shared.setActivationPolicy(.accessory) else {
+                return false
+            }
+            try approveInWindow(prompt, context: context)
+            return true
+        }
+        if shown {
+            return
+        }
+    }
+    try authenticateInSheet(reason: prompt.fallback, context: context)
+#endif
+}
+
+/// Whether this process runs in the login session on the Mac's own display, where a window can be shown: not over
+/// SSH, and not in another user's session after a switch.
+private func isOnConsole() -> Bool {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+        return false
+    }
+    return session[kCGSessionOnConsoleKey] as? Bool == true
+}
+
+/// macOS's own Touch ID sheet, "gh-touchid is trying to <reason>."
+private func authenticateInSheet(reason: String, context: LAContext) throws {
     let result = AuthenticationResult()
     let semaphore = DispatchSemaphore(value: 0)
 
     context.evaluatePolicy(
         .deviceOwnerAuthenticationWithBiometrics,
-        localizedReason: prompt.fallback
+        localizedReason: reason
     ) { success, error in
         result.success = success
         result.error = error
@@ -58,5 +87,4 @@ func authenticate(_ prompt: Prompt) throws {
             result.error?.localizedDescription ?? "authentication was denied"
         )
     }
-#endif
 }

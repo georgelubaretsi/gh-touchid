@@ -3,8 +3,8 @@
 Touch ID-gated GitHub access for macOS.
 
 `gh` and Git act as a GitHub App of yours (a bot) with short-lived tokens limited to one repository. Each use asks
-for Touch ID, naming the command and the processes that asked, unless it comes from inside a session you approved.
-Your own GitHub accounts are one Touch ID away with `gh-touchid as <login>`.
+for Touch ID in a window naming who asked, the command and the repository, unless it comes from inside a session you
+approved. Your own GitHub accounts are one Touch ID away with `gh-touchid as <login>`.
 
 - Every use gets its own token, minted for that use: one repository, about an hour long, without the `workflows`
   permission unless you elevate the repository for a while. The token `gh` used is revoked as soon as `gh` exits.
@@ -95,14 +95,14 @@ gh pr create --fill
 git push
 ```
 
-Outside a session, each command asks for Touch ID, e.g. "gh-touchid is trying to let omp run “gh pr list” on
-owner/repo", naming the program that asked (the full process chain goes to the access log). It then gets a token
-for that one repository, and prints `To approve this whole session once, run: gh-touchid session` to stderr. The
-repository is the one named with `-R`/`--repo` (`OWNER/REPO`,
-`github.com/OWNER/REPO` or a URL), else `GH_REPO`, else the current repository's `origin`; for Git, the repository
-in the URL. When a flag right before `-R` might take a value (as in `gh issue create --body -R`), gh-touchid reads
-which `gh` flags take values from the pinned `gh`'s `help reference`, only for such ambiguous commands. If that
-cannot settle it, `as <login> gh …` is refused (an account's token is not limited to the repository in the dialog).
+Outside a session, each command asks for Touch ID ("Allow omp to push to owner/repo?" for `git push`, "Allow omp to
+use owner/repo?" for `gh pr list`), naming the program that asked (the full process chain goes to the access log). It
+then gets a token for that one repository, and prints `To approve this whole session once, run: gh-touchid session`
+to stderr. The repository is the one named with `-R`/`--repo` (`OWNER/REPO`, `github.com/OWNER/REPO` or a URL), else
+`GH_REPO`, else the current repository's `origin`; for Git, the repository in the URL. When a flag right before `-R`
+might take a value (as in `gh issue create --body -R`), gh-touchid reads which `gh` flags take values from the pinned
+`gh`'s `help reference`, only for such ambiguous commands. If that cannot settle it, `as <login> gh …` is refused (an
+account's token is not limited to the repository in the dialog).
 
 For a repository whose owner has no App stored, `gh` and Git are refused before any Touch ID dialog, with a hint
 naming your stored accounts.
@@ -114,9 +114,17 @@ gh-touchid as LOGIN gh pr merge 12    # gh with LOGIN's token
 gh-touchid as LOGIN git push          # any other command runs with GH_TOUCHID_AS=LOGIN, which gh and Git honour
 ```
 
-Every use asks for Touch ID, inside sessions too: "let omp act as LOGIN: “gh pr merge” on owner/repo", without the
-repository for commands outside one such as `gh api user`. Git gets LOGIN as the username.
+Every use asks for Touch ID, inside sessions too: "Allow omp to act as LOGIN?", with the command and, when there is
+one, the repository (`gh api user` has none). Git gets LOGIN as the username.
 `GH_TOUCHID_AS=LOGIN` in the environment does the same for any `gh` or Git command.
+
+### The Touch ID window
+
+Each Touch ID request opens a window in front of the others with the icon of the app it came from (your terminal,
+say), a question in plain words, one sentence on what allowing means, and the command or the folder. Touch the
+sensor to allow, or choose **Deny** (or press Esc); after five minutes without an answer the window closes and the
+command fails. Where no window can be shown, such as over SSH, macOS's own Touch ID sheet asks instead, in one line:
+"gh-touchid is trying to let omp run “git push” on owner/repo."
 
 ## Sessions
 
@@ -132,15 +140,16 @@ github.com `origin` whose owner has an App stored. A shell that only runs a comm
 script.sh`) is not the session: gh-touchid looks past such shells to the program that started them, so a harness
 that runs `sh -c 'gh-touchid session'` registers itself; an interactive shell registers itself.
 
-The session is pending until its first GitHub use: then one Touch ID dialog asks to "let omp use owner/one and two
-until it quits, and open issues in your other repos (started 14:05 in ~/devel/one)". From then on, the process and
-everything it starts get tokens for those repositories without Touch ID, until it exits.
+The session is pending until its first GitHub use: then one Touch ID window asks "Allow omp to work on owner/one and
+two?" (until it quits, and it can also open issues in your other repositories), naming the folder and when it
+started. From then on, the process and everything it starts get tokens for those repositories without Touch ID,
+until it exits.
 
 - Other repositories that one of your Apps is installed on get issue-only tokens (open and comment on issues, read
   the code; no workflows even when elevated). Private ones need no dialog; for a public one each use asks for Touch
-  ID ("let omp run “gh issue create” on public owner/three"), and the token is revoked if you decline. Git gets the
-  issue-only token for a private repository (fetching works, pushing does not) and nothing for a public one, which
-  it reads without a credential.
+  ID ("Allow omp to post in owner/three?"), and the token is revoked if you decline. Git gets the issue-only token for
+  a private repository (fetching works, pushing does not) and nothing for a public one, which it reads without a
+  credential.
 - Processes outside the session still ask for Touch ID per use; acting as an account always does.
 - When several commands of a pending session start at once, one dialog covers them all.
 - Sessions nest: for each repository, an approved session that lists it decides, even when a pending session that
