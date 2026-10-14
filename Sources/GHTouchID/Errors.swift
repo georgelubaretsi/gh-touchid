@@ -6,6 +6,7 @@ enum ToolError: Error, CustomStringConvertible {
     case missingRepository
     case missingAccount(String)
     case missingApp(String)
+    case noApp(owner: String, logins: [String], program: String)
     case invalidToken
     case forbiddenCommand
     case missingGitHubCLI(String)
@@ -32,6 +33,12 @@ enum ToolError: Error, CustomStringConvertible {
             return "no token is stored for the account \(login); run `gh-touchid user add \(login)` first"
         case let .missingApp(owner):
             return "no GitHub App is stored for \(owner); run `gh-touchid app set \(owner) --client-id <id> < key.pem` first"
+        case let .noApp(owner, logins, program):
+            let accounts = logins.isEmpty
+                ? "none stored yet; add one with `gh-touchid user add <login>`"
+                : "stored: \(logins.joined(separator: ", "))"
+            return "no GitHub App is stored for \(owner); to act as one of your accounts: "
+                + "gh-touchid as <login> \(program) … (\(accounts))"
         case .invalidToken:
             return "the token must contain only printable ASCII and no whitespace"
         case .forbiddenCommand:

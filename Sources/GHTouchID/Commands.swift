@@ -88,7 +88,8 @@ func runGitHub(_ arguments: [String], account: String?) throws -> Int32 {
     let authorization = try authorizeUse(
         repository: repository,
         command: commandSummary(["gh"] + arguments),
-        account: account
+        account: account,
+        forGit: false
     )
     // from the mint until the revoke, a signal is remembered or passed on to gh instead of ending gh-touchid
     let relay = SignalRelay()
@@ -137,7 +138,8 @@ private func gitCredential(_ arguments: [String]) throws -> Int32 {
         let authorization = try authorizeUse(
             repository: repository,
             command: "Git over HTTPS",
-            account: account
+            account: account,
+            forGit: true
         )
         let credential = try issueCredential(authorization)
         var lines = ["username=\(credential.username)", "password=\(credential.token)"]

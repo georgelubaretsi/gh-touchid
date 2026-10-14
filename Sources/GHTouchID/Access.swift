@@ -4,9 +4,10 @@ import Foundation
 // Who gets a token for repository R, decided by the client that needs it:
 // 1. Acting as one of your accounts (`as <login>`, GH_TOUCHID_AS=<login>): Touch ID for every use, sessions or not,
 //    then that account's token.
-// 2. Inside an approved session that lists R: a token from the App without Touch ID.
-// 3. Inside a pending session that lists R: one Touch ID approves the session, then as 2.
-// 4. Anything else: Touch ID naming the command and who asked, then one token from the App.
+// 2. R's owner has no App stored: refused before any dialog.
+// 3. Inside an approved session that lists R: a token from the App without Touch ID.
+// 4. Inside a pending session that lists R: one Touch ID approves the session, then as 3.
+// 5. Anything else: Touch ID naming the command and who asked, then one token from the App.
 // App tokens include `workflows` only if R is elevated when the token is minted, which is after any dialog.
 // Every outcome is logged with the process chain.
 
@@ -87,7 +88,7 @@ struct Authorization {
 }
 
 /// Touch ID or session approval for one use of `repository` by `command`, as `account` when one is given.
-func authorizeUse(repository: String?, command: String, account: String?) throws -> Authorization {
+func authorizeUse(repository: String?, command: String, account: String?, forGit: Bool) throws -> Authorization {
     let chain = processChain(getpid())
     let target = repository ?? "no repository"
     func authorized(_ grant: Grant) -> Authorization {
@@ -106,6 +107,13 @@ func authorizeUse(repository: String?, command: String, account: String?) throws
         guard let repository else {
             throw ToolError.missingRepository
         }
+        // nothing could be minted: say so before anyone is asked
+        let owner = ownerAccount(repository)
+        guard hasAppCredentials(owner: owner) else {
+            let logins = (try? storedUserLogins()) ?? []
+            throw ToolError.noApp(owner: owner, logins: logins, program: forGit ? "git" : "gh")
+        }
+
         let reply = agentRequest(["op": "check", "repo": repository])
         if let session = SessionInfo(reply?["session"]), reply?["covers"] as? Bool == true {
             if !session.approved {
