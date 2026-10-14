@@ -1,13 +1,13 @@
 import Darwin
 import Foundation
 
-// The daemon (`gh-touchid agent`) remembers sessions and elevations; it holds no secrets. A session is the process
-// that ran `gh-touchid session` (the daemon takes it from the socket peer, never from the message), named by pid and
-// start time. A pending session is approved with Touch ID by the first client inside it that needs a token; after
-// that, every process inside it gets tokens for its repositories (and issue-only tokens for others) without Touch ID
-// until it exits. Clients mint the tokens themselves; the daemon only answers which session decides a caller's request
-// and whether a repository is elevated. Sessions nest: an inner session never shadows an outer one that lists the
-// repository asked for.
+// The daemon (`gh-touchid agent`) remembers sessions and elevations; it holds no secrets. A session is the program
+// that ran `gh-touchid session`, past shells that only run a command or a script (the daemon takes it from the socket
+// peer, never from the message), named by pid and start time. A pending session is approved with Touch ID by the
+// first client inside it that needs a token; after that, every process inside it gets tokens for its repositories
+// (and issue-only tokens for others) without Touch ID until it exits. Clients mint the tokens themselves; the daemon
+// only answers which session decides a caller's request and whether a repository is elevated. Sessions nest: an
+// inner session never shadows an outer one that lists the repository asked for.
 //
 // `register`, `check`, `status` and `lock` are answered for any peer running as this user; `begin-approval`,
 // `approve`, `deny` and `elevate` only for a peer running this very executable.
@@ -136,8 +136,8 @@ private final class SessionAgent: @unchecked Sendable {
         guard !repositories.isEmpty else {
             return ["error": "a session needs at least one owner/name repository"]
         }
-        // the session is whoever started `gh-touchid session`
-        guard let root = parentProcess(peer), root > 1, let start = processStart(root) else {
+        // the session is the program that started `gh-touchid session`, past shells that only run a command
+        guard let root = sessionRoot(of: peer), let start = processStart(root) else {
             return ["error": "the caller has no parent process to register"]
         }
         let now = Date()

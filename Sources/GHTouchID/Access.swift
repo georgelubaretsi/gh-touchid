@@ -129,6 +129,7 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
             let covers = reply?["covers"] as? Bool == true
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
+        fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
         try authenticate(
             reason: "use GitHub for \(repository): \(command) (asked by \(processChain(getppid())))"
         )

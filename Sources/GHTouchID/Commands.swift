@@ -159,10 +159,9 @@ private func gitCredential(_ arguments: [String]) throws -> Int32 {
 /// Whether the nearest ancestor that is not a shell is Git's HTTP transport, as when Git fetches or pushes;
 /// `git credential fill` and anything else that asks directly are not.
 private func calledByGitTransport() -> Bool {
-    let shells: Set<String> = ["sh", "bash", "zsh", "dash"]
     for ancestor in lineage(getppid()) {
         let name = processName(ancestor)
-        if shells.contains(name) {
+        if shellNames.contains(name) {
             continue
         }
         return name == "git-remote-http" || name == "git-remote-https"
@@ -182,10 +181,11 @@ private func readCredentialRequest() -> [String: String] {
     return request
 }
 
-/// `session [--repo <owner/name>]...`: registers the process that ran this command.
+/// `session [--repo <owner/name>]...`: registers the program that ran this command, for the repositories named or
+/// those of the workspace here.
 private func registerSession(_ arguments: [String]) throws -> Int32 {
     let options = try parseOptions(arguments, allowed: ["--repo"])
-    let repositories = try repositoriesOption(options)
+    let repositories = options["--repo"] == nil ? try workspaceRepositories() : try repositoriesOption(options)
     try ensureAgent()
     let request: [String: Any] = [
         "op": "register",

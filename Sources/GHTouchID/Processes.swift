@@ -46,6 +46,93 @@ func processStart(_ pid: pid_t) -> ProcessStart? {
     return ProcessStart(seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
 }
 
+/// The command-line arguments of a process of this user (`KERN_PROCARGS2`), argv[0] first; nil when unreadable.
+func processArguments(_ pid: pid_t) -> [String]? {
+    var name: [Int32] = [CTL_KERN, KERN_ARGMAX]
+    var limit: Int32 = 0
+    var size = MemoryLayout<Int32>.size
+    guard sysctl(&name, 2, &limit, &size, nil, 0) == 0, limit > 0 else {
+        return nil
+    }
+    // argc, the executable path, NUL padding, then argc NUL-terminated arguments (then the environment)
+    var buffer = [UInt8](repeating: 0, count: Int(limit))
+    name = [CTL_KERN, KERN_PROCARGS2, pid]
+    size = buffer.count
+    guard sysctl(&name, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else {
+        return nil
+    }
+    let count = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+    var index = MemoryLayout<Int32>.size
+    while index < size, buffer[index] != 0 {
+        index += 1
+    }
+    while index < size, buffer[index] == 0 {
+        index += 1
+    }
+    var arguments: [String] = []
+    while arguments.count < count, index < size {
+        let start = index
+        while index < size, buffer[index] != 0 {
+            index += 1
+        }
+        arguments.append(String(decoding: buffer[start ..< index], as: UTF8.self))
+        index += 1
+    }
+    return arguments
+}
+
+let shellNames: Set<String> = ["sh", "bash", "zsh", "dash"]
+
+/// Whether `pid` is a shell that only runs a command (`-c`) or a script, rather than an interactive one.
+func isNonInteractiveShell(_ pid: pid_t) -> Bool {
+    guard shellNames.contains(processName(pid)), let arguments = processArguments(pid) else {
+        return false
+    }
+    var interactive = false
+    var command = false
+    var script = false
+    var index = 1
+    while index < arguments.count {
+        let argument = arguments[index]
+        if argument == "--" || argument == "-" {
+            script = index + 1 < arguments.count
+            break
+        }
+        if argument.hasPrefix("--") {
+            if argument == "--rcfile" || argument == "--init-file" {
+                index += 1
+            }
+        } else if argument.hasPrefix("-") || argument.hasPrefix("+") {
+            let letters = argument.dropFirst()
+            if argument.hasPrefix("-") {
+                interactive = interactive || letters.contains("i")
+                command = command || letters.contains("c")
+            }
+            if letters.contains("o") || letters.contains("O") {
+                index += 1 // -o option, -O shopt_option
+            }
+        } else {
+            script = true // a script, or the command of -c
+            break
+        }
+        index += 1
+    }
+    return !interactive && (command || script)
+}
+
+/// The process a session belongs to: the parent of `gh-touchid session`, or further up past shells that only run a
+/// command or a script, so that a program running `sh -c 'gh-touchid session'` registers itself. An interactive
+/// shell is a session root itself.
+func sessionRoot(of pid: pid_t) -> pid_t? {
+    guard var root = parentProcess(pid), root > 1 else {
+        return nil
+    }
+    while isNonInteractiveShell(root), let parent = parentProcess(root), parent > 1 {
+        root = parent
+    }
+    return root
+}
+
 /// `pid` and its ancestors, nearest first, without launchd; at most 64.
 func lineage(_ pid: pid_t) -> [pid_t] {
     var result: [pid_t] = []

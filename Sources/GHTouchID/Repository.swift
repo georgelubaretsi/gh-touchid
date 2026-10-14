@@ -2,12 +2,12 @@ import Foundation
 
 private let nameCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
 
-/// `owner/name` of the current Git repository's github.com `origin`.
-func repositoryIdentifier() throws -> String {
+/// `owner/name` of the github.com `origin` of the Git repository in `folder` (by default the current one).
+func repositoryIdentifier(in folder: String? = nil) throws -> String {
     let process = Process()
     let output = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["git", "remote", "get-url", "origin"]
+    process.arguments = ["git"] + (folder.map { ["-C", $0] } ?? []) + ["remote", "get-url", "origin"]
     process.standardOutput = output
     process.standardError = FileHandle.nullDevice
 
