@@ -7,6 +7,8 @@ import Security
 struct InstallationToken {
     let token: String
     let expires: Date
+    /// Whether the repository is private, when GitHub said so in its reply.
+    let isPrivate: Bool?
 }
 
 /// The App's private key from a PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`), the format GitHub hands out.
@@ -81,8 +83,17 @@ func verifyAppKey(clientId: String, key: SecKey) throws -> String {
     return (object?["slug"] as? String) ?? (object?["name"] as? String) ?? "GitHub"
 }
 
-/// A token for one repository from its owner's App; it includes `workflows` only when `includeWorkflows`.
-func mintInstallationToken(repository: String, includeWorkflows: Bool) throws -> InstallationToken {
+/// What a token may do: the installation's permissions (without `workflows` unless the repository is elevated), or
+/// just open issues and read the repository.
+enum TokenScope {
+    case installation(includeWorkflows: Bool)
+    case issues
+
+    static let issuePermissions = ["issues": "write", "metadata": "read", "contents": "read"]
+}
+
+/// A token for one repository from its owner's App.
+func mintInstallationToken(repository: String, scope: TokenScope) throws -> InstallationToken {
     let owner = String(repository.split(separator: "/")[0])
     let credentials = try loadAppCredentials(owner: ownerAccount(repository))
     let jwt = try appJWT(clientId: credentials.clientId, key: rsaPrivateKey(pem: credentials.privateKey))
@@ -99,8 +110,13 @@ func mintInstallationToken(repository: String, includeWorkflows: Bool) throws ->
                 + "(HTTP \(installation.status): \(installation.message))"
         )
     }
-    if !includeWorkflows {
-        permissions.removeValue(forKey: "workflows")
+    switch scope {
+    case let .installation(includeWorkflows):
+        if !includeWorkflows {
+            permissions.removeValue(forKey: "workflows")
+        }
+    case .issues:
+        permissions = TokenScope.issuePermissions
     }
 
     let created = try githubAPI(
@@ -117,7 +133,8 @@ func mintInstallationToken(repository: String, includeWorkflows: Bool) throws ->
             "GitHub did not issue a token for \(repository) (HTTP \(created.status): \(created.message))"
         )
     }
-    return InstallationToken(token: token, expires: expires)
+    let listed = (created.object?["repositories"] as? [[String: Any]])?.first
+    return InstallationToken(token: token, expires: expires, isPrivate: listed?["private"] as? Bool)
 }
 
 /// Ends an installation token early (`DELETE /installation/token`).

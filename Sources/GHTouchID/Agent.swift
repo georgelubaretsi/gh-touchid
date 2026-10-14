@@ -4,9 +4,10 @@ import Foundation
 // The daemon (`gh-touchid agent`) remembers sessions and elevations; it holds no secrets. A session is the process
 // that ran `gh-touchid session` (the daemon takes it from the socket peer, never from the message), named by pid and
 // start time. A pending session is approved with Touch ID by the first client inside it that needs a token; after
-// that, every process inside it gets tokens for its repositories without Touch ID until it exits. Clients mint the
-// tokens themselves; the daemon only answers which session decides a caller's request and whether a repository is
-// elevated. Sessions nest: an inner session never shadows an outer one that lists the repository asked for.
+// that, every process inside it gets tokens for its repositories (and issue-only tokens for others) without Touch ID
+// until it exits. Clients mint the tokens themselves; the daemon only answers which session decides a caller's request
+// and whether a repository is elevated. Sessions nest: an inner session never shadows an outer one that lists the
+// repository asked for.
 //
 // `register`, `check`, `status` and `lock` are answered for any peer running as this user; `begin-approval`,
 // `approve`, `deny` and `elevate` only for a peer running this very executable.

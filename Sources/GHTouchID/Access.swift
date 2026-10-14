@@ -6,10 +6,12 @@ import Foundation
 //    then that account's token.
 // 2. R's owner has no App stored: refused before any dialog.
 // 3. Inside an approved session that lists R: a token from the App without Touch ID.
-// 4. Inside a pending session that lists R: one Touch ID approves the session, then as 3.
-// 5. Anything else: Touch ID naming the command and who asked, then one token from the App.
-// App tokens include `workflows` only if R is elevated when the token is minted, which is after any dialog.
-// Every outcome is logged with the process chain.
+// 4. Inside an approved session that does not list R: an issue-only token from the App; for a public R, Touch ID for
+//    this use first, and nothing for Git.
+// 5. Inside a pending session: one Touch ID approves the session, then as 3 or 4.
+// 6. Anything else: Touch ID naming the command and who asked, then one token from the App.
+// App tokens include `workflows` only if R is elevated when the token is minted, which is after any dialog;
+// issue-only tokens never do. Every outcome is logged with the process chain.
 
 struct GitHubCredential {
     let token: String
@@ -73,6 +75,8 @@ enum Grant {
     case account(String)
     /// A token from the App: for a session that lists the repository, or (no session) once after Touch ID.
     case app(session: SessionInfo?)
+    /// An issue-only token from the App, for a repository the session does not list.
+    case issues(session: SessionInfo)
 }
 
 /// A use that Touch ID or a session allowed; the token is issued separately, right after.
@@ -80,6 +84,9 @@ struct Authorization {
     /// nil only when acting as an account and no repository could be told.
     let repository: String?
     let grant: Grant
+    /// What asked, for dialogs: a gh command line or `Git over HTTPS`.
+    let command: String
+    let forGit: Bool
     let chain: String
 
     var target: String {
@@ -92,7 +99,7 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
     let chain = processChain(getpid())
     let target = repository ?? "no repository"
     func authorized(_ grant: Grant) -> Authorization {
-        Authorization(repository: repository, grant: grant, chain: chain)
+        Authorization(repository: repository, grant: grant, command: command, forGit: forGit, chain: chain)
     }
     do {
         if let account {
@@ -115,11 +122,12 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
         }
 
         let reply = agentRequest(["op": "check", "repo": repository])
-        if let session = SessionInfo(reply?["session"]), reply?["covers"] as? Bool == true {
+        if let session = SessionInfo(reply?["session"]) {
             if !session.approved {
                 try awaitApproval(of: session)
             }
-            return authorized(.app(session: session))
+            let covers = reply?["covers"] as? Bool == true
+            return authorized(covers ? .app(session: session) : .issues(session: session))
         }
         try authenticate(
             reason: "use GitHub for \(repository): \(command) (asked by \(processChain(getppid())))"
@@ -146,15 +154,56 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
             }
             // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
             let elevated = agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true
-            let token = try mintInstallationToken(repository: repository, includeWorkflows: elevated)
+            let token = try mintInstallationToken(
+                repository: repository,
+                scope: .installation(includeWorkflows: elevated)
+            )
             let grant = session.map { "session \($0.label)" } ?? "once"
             appendAccessLog("granted \(repository) (\(grant))\(elevated ? ", elevated" : "") to \(chain)")
             return GitHubCredential(token: token.token, username: "x-access-token", expires: token.expires)
+        case let .issues(session):
+            guard let repository = authorization.repository else {
+                throw ToolError.missingRepository
+            }
+            return try issueOnlyCredential(repository: repository, session: session, authorization: authorization)
         }
     } catch {
         appendAccessLog("refused \(authorization.target) to \(chain): \(error)")
         throw error
     }
+}
+
+/// An issue-only token for a repository the session does not list. A public one takes Touch ID for this use, and
+/// Git gets nothing for it (it reads public repositories without a credential); the token is minted first, because
+/// its reply says whether the repository is public, and revoked when the use is not allowed.
+private func issueOnlyCredential(
+    repository: String,
+    session: SessionInfo,
+    authorization: Authorization
+) throws -> GitHubCredential {
+    let minted = try mintInstallationToken(repository: repository, scope: .issues)
+    let credential = GitHubCredential(token: minted.token, username: "x-access-token", expires: minted.expires)
+    let grant = "session \(session.label)"
+    do {
+        if try minted.isPrivate ?? isPrivateRepository(repository, token: minted.token) {
+            appendAccessLog("granted \(repository) (issues, \(grant)) to \(authorization.chain)")
+            return credential
+        }
+        guard !authorization.forGit else {
+            throw ToolError.refused(
+                "\(repository) is public and outside the session; Git reads it without a credential"
+            )
+        }
+        try authenticate(
+            reason: "let \(session.program) open issues on public \(repository): \(authorization.command) "
+                + "(asked by \(processChain(getppid())))"
+        )
+    } catch {
+        revokeAfterUse(credential, repository: repository)
+        throw error
+    }
+    appendAccessLog("granted \(repository) (issues, public, approved once, \(grant)) to \(authorization.chain)")
+    return credential
 }
 
 /// Approves a pending session with Touch ID, or waits while another client of the same session shows the dialog.
@@ -166,7 +215,7 @@ private func awaitApproval(of session: SessionInfo) throws {
     if reply?["lease"] as? Bool == true {
         let reason = "let \(session.program) in \(displayFolder(session.folder)) "
             + "(started \(clockTime(session.started))) use GitHub for "
-            + "\(repositoryList(session.repositories)) until it exits"
+            + "\(repositoryList(session.repositories)) until it exits, and open issues on your other repositories"
         do {
             try authenticate(reason: reason)
         } catch {

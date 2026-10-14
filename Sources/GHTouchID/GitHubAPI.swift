@@ -93,3 +93,14 @@ func tokenOwner(_ token: String) throws -> (login: String, scopes: String?) {
     }
     return (login, response.header("X-OAuth-Scopes"))
 }
+
+/// Whether `repository` is private (`GET /repos/{owner}/{repo}` with a token that can read it).
+func isPrivateRepository(_ repository: String, token: String) throws -> Bool {
+    let response = try githubAPI("GET", "/repos/\(repository)", bearer: token)
+    guard response.status == 200, let isPrivate = response.object?["private"] as? Bool else {
+        throw ToolError.github(
+            "cannot tell whether \(repository) is public (HTTP \(response.status): \(response.message))"
+        )
+    }
+    return isPrivate
+}
