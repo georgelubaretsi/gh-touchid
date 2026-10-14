@@ -88,31 +88,13 @@ func repositoriesOption(_ options: [String: [String]]) throws -> [String] {
     return repositories
 }
 
-/// The repository a `gh` command is for: `-R`/`--repo`, else GH_REPO, else the current repository.
+/// The repository a `gh` command is for: `-R`/`--repo`, else GH_REPO, else the current repository. gh's flag
+/// definitions are read only when a flag before the selector may take it as its value; when they cannot be read, only
+/// `-R`/`--repo` is known to take a value (a wrong guess only yields a token gh cannot use).
 func requestedRepository(_ arguments: [String]) throws -> String {
-    var index = 0
-    while index < arguments.count {
-        let argument = arguments[index]
-        if argument == "--" {
-            break
-        }
-        if argument == "-R" || argument == "--repo" {
-            guard index + 1 < arguments.count else {
-                throw ToolError.input("\(argument) needs a repository")
-            }
-            return try repositorySpecification(arguments[index + 1])
-        }
-        if argument.hasPrefix("--repo=") {
-            return try repositorySpecification(String(argument.dropFirst("--repo=".count)))
-        }
-        if argument.hasPrefix("-R"), argument.count > 2 {
-            var value = argument.dropFirst(2)
-            if value.hasPrefix("=") {
-                value = value.dropFirst()
-            }
-            return try repositorySpecification(String(value))
-        }
-        index += 1
+    let flags = repositorySelectorIsAmbiguous(arguments) ? gitHubCommandFlags(arguments) : nil
+    if let selector = try repositorySelector(arguments, flags: flags ?? CommandFlags()) {
+        return try repositorySpecification(selector)
     }
     if let repository = ProcessInfo.processInfo.environment["GH_REPO"], !repository.isEmpty {
         return try repositorySpecification(repository)
