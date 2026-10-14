@@ -5,7 +5,8 @@ import Foundation
 // that ran `gh-touchid session` (the daemon takes it from the socket peer, never from the message), named by pid and
 // start time. A pending session is approved with Touch ID by the first client inside it that needs a token; after
 // that, every process inside it gets tokens for its repositories without Touch ID until it exits. Clients mint the
-// tokens themselves; the daemon only answers which session a caller is in and whether a repository is elevated.
+// tokens themselves; the daemon only answers which session decides a caller's request and whether a repository is
+// elevated. Sessions nest: an inner session never shadows an outer one that lists the repository asked for.
 //
 // `register`, `check`, `status` and `lock` are answered for any peer running as this user; `begin-approval`,
 // `approve`, `deny` and `elevate` only for a peer running this very executable.
@@ -160,11 +161,18 @@ private final class SessionAgent: @unchecked Sendable {
         return ["session": session.message(now: now)]
     }
 
+    /// `check {repo}`: the session that decides the caller's request for `repo`; `check {session}`: that session, while
+    /// it is live and at or above the caller (how a client waits for another one's approval dialog). `covers` says
+    /// whether the session lists `repo`.
     private func check(_ request: [String: Any], peer: pid_t) -> [String: Any] {
         let repository = (request["repo"] as? String).flatMap(validRepository)?.lowercased()
         var reply: [String: Any] = ["elevated": repository.map(isElevated) ?? false]
-        if let session = enclosingSession(of: peer) {
+        let session = request["session"] != nil
+            ? sessionAbove(peer, id: request["session"])
+            : deciding(repository, for: peer)
+        if let session {
             reply["session"] = session.message(now: Date())
+            reply["covers"] = repository.map { session.repositories.contains($0) } ?? false
         }
         return reply
     }
@@ -234,14 +242,17 @@ private final class SessionAgent: @unchecked Sendable {
         ]
     }
 
-    /// The nearest live session at or above `pid`.
-    private func enclosingSession(of pid: pid_t) -> Session? {
-        for ancestor in lineage(pid) {
-            if let session = sessions[ancestor], processStart(ancestor) == session.start {
-                return session
+    /// Among the live sessions at or above `pid`: the nearest approved one that lists `repository`, else the nearest
+    /// pending one that lists it, else the nearest approved one, else the nearest pending one.
+    private func deciding(_ repository: String?, for pid: pid_t) -> Session? {
+        let live = lineage(pid).compactMap { ancestor -> Session? in
+            guard let session = sessions[ancestor], processStart(ancestor) == session.start else {
+                return nil
             }
+            return session
         }
-        return nil
+        let listing = live.filter { session in repository.map { session.repositories.contains($0) } ?? false }
+        return listing.first(where: \.approved) ?? listing.first ?? live.first(where: \.approved) ?? live.first
     }
 
     /// The session with `id`, when it is live and at or above `pid`.

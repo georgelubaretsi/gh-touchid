@@ -50,10 +50,6 @@ struct SessionInfo {
     var label: String {
         "\(program)[\(pid)]"
     }
-
-    func covers(_ repository: String) -> Bool {
-        repositories.contains(repository.lowercased())
-    }
 }
 
 /// Whether the caller asked to act as you (GH_TOUCHID_AS=me) rather than as the owner's App.
@@ -86,8 +82,8 @@ func authorizeUse(repository: String, command: String, asOwner: Bool) throws -> 
         }
 
         let grant: String
-        if let session = SessionInfo(agentRequest(["op": "check", "repo": repository])?["session"]),
-           session.covers(repository) {
+        let reply = agentRequest(["op": "check", "repo": repository])
+        if let session = SessionInfo(reply?["session"]), reply?["covers"] as? Bool == true {
             if !session.approved {
                 try awaitApproval(of: session)
             }
@@ -157,7 +153,8 @@ private func awaitApproval(of session: SessionInfo) throws {
     let deadline = Date().addingTimeInterval(approvalWindow + 10)
     while Date() < deadline {
         sleep(1)
-        guard let current = SessionInfo(agentRequest(["op": "check"])?["session"]), current.id == session.id else {
+        let reply = agentRequest(["op": "check", "session": session.id])
+        guard let current = SessionInfo(reply?["session"]), current.id == session.id else {
             throw ToolError.refused("the session ended before it was approved")
         }
         if current.approved {
