@@ -9,11 +9,12 @@ private final class AuthenticationResult: @unchecked Sendable {
     var error: Error?
 }
 
-/// Touch ID; `reason` completes the dialog's "gh-touchid is trying to …".
-func authenticate(reason: String) throws {
+/// Touch ID for `prompt`, in macOS's own sheet: "gh-touchid is trying to <fallback>." Test builds print
+/// `AUTH: <fallback>` instead.
+func authenticate(_ prompt: Prompt) throws {
 #if GH_TOUCHID_TESTING
     let environment = ProcessInfo.processInfo.environment
-    fputs("AUTH: \(reason)\n", stderr)
+    fputs("AUTH: \(prompt.fallback)\n", stderr)
     if let delay = environment["GH_TOUCHID_TEST_AUTH_DELAY"].flatMap(Double.init) {
         Thread.sleep(forTimeInterval: delay)
     }
@@ -40,7 +41,7 @@ func authenticate(reason: String) throws {
 
     context.evaluatePolicy(
         .deviceOwnerAuthenticationWithBiometrics,
-        localizedReason: reason
+        localizedReason: prompt.fallback
     ) { success, error in
         result.success = success
         result.error = error

@@ -106,8 +106,7 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
             guard hasUserToken(login: account) else {
                 throw ToolError.missingAccount(account)
             }
-            let on = repository.map { " on \($0)" } ?? ""
-            try authenticate(reason: "let \(requester()) act as \(account): “\(command)”\(on)")
+            try authenticate(.acting(as: account, by: requester(), command: command, repository: repository))
             return authorized(.account(account))
         }
         guard let repository else {
@@ -129,7 +128,7 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
         fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
-        try authenticate(reason: "let \(requester()) run “\(command)” on \(repository)")
+        try authenticate(.appUse(by: requester(), command: command, repository: repository))
         return authorized(.app(session: nil))
     } catch {
         appendAccessLog("refused \(target) to \(chain): \(error)")
@@ -192,7 +191,7 @@ private func issueOnlyCredential(
                 "\(repository) is public and outside the session; Git reads it without a credential"
             )
         }
-        try authenticate(reason: "let \(session.program) run “\(authorization.command)” on public \(repository)")
+        try authenticate(.publicIssue(program: session.program, command: authorization.command, repository: repository))
     } catch {
         revokeAfterUse(credential, repository: repository)
         throw error
@@ -208,11 +207,14 @@ private func awaitApproval(of session: SessionInfo) throws {
         return
     }
     if reply?["lease"] as? Bool == true {
-        let reason = "let \(session.program) use \(repositoryWords(session.repositories)) until it quits, "
-            + "and open issues in your other repos (started \(clockTime(session.started)) "
-            + "in \(displayFolder(session.folder)))"
+        let prompt = Prompt.session(
+            program: session.program,
+            repositories: session.repositories,
+            folder: session.folder,
+            started: session.started
+        )
         do {
-            try authenticate(reason: reason)
+            try authenticate(prompt)
         } catch {
             _ = agentRequest(["op": "deny", "session": session.id, "reason": "\(error)"])
             throw error

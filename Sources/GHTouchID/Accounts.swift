@@ -36,7 +36,7 @@ func userCommand(_ arguments: [String]) throws -> Int32 {
             stderr
         )
     }
-    try authenticate(reason: "store a GitHub token for \(login)")
+    try authenticate(.accountToken(login))
     try storeUserToken(token, login: login)
     fputs("Stored the token of \(login).\n", stderr)
     return 0

@@ -83,7 +83,7 @@ private func setApp(owner: String, _ arguments: [String]) throws -> Int32 {
     }
     let pem = try readStandardInputText().trimmingCharacters(in: .whitespacesAndNewlines)
     let key = try rsaPrivateKey(pem: pem)
-    try authenticate(reason: "store the GitHub App key for \(owner)")
+    try authenticate(.appKey(owner: owner))
     let app = try verifyAppKey(clientId: clientId, key: key)
     try storeAppCredentials(AppCredentials(clientId: clientId, privateKey: pem), owner: owner)
     fputs("Stored the key of the GitHub App \(app) for \(owner); GitHub accepted it.\n", stderr)
@@ -235,8 +235,7 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
     }
     let seconds = try parseDuration(durations[0])
     let repositories = try repositoriesOption(options)
-    try authenticate(reason: "let your agents change workflows in \(repositoryWords(repositories)) "
-        + "for \(durationWords(seconds))")
+    try authenticate(.elevation(repositories: repositories, seconds: seconds))
     try ensureAgent()
     let reply = agentRequest(["op": "elevate", "repos": repositories, "seconds": seconds])
     guard reply?["ok"] as? Bool == true else {

@@ -1,7 +1,138 @@
 import Foundation
 
-// Words for Touch ID dialogs, which macOS shows as "gh-touchid is trying to <reason>." They name the program that
-// asked, the command and the repositories in plain words; the full process chain goes to the access log instead.
+// Words for Touch ID dialogs. They name the program that asked, the command and the repositories in plain words; the
+// full process chain goes to the access log instead.
+
+/// What a Touch ID dialog asks. The approval window shows the title (a question), the message (one short sentence)
+/// and the rows; `fallback` is for macOS's own sheet, "gh-touchid is trying to <fallback>.", where no window can be
+/// shown, and for the test build's `AUTH:` line.
+struct Prompt {
+    struct Row {
+        /// An SF Symbol.
+        let symbol: String
+        let text: String
+        var monospaced = false
+        /// What VoiceOver says before the text, when the text alone does not say what it is.
+        var label: String?
+    }
+
+    let title: String
+    let message: String
+    var rows: [Row] = []
+    let fallback: String
+}
+
+extension Prompt {
+    /// One use of an App token outside any session.
+    static func appUse(by who: String, command: String, repository: String) -> Prompt {
+        Prompt(
+            title: "Allow \(who) to \(repositoryVerb(command)) \(repository)?",
+            message: "As your \(ownerAccount(repository)) bot, for this command only.",
+            rows: [Row(symbol: "terminal", text: command, monospaced: true, label: "Command")],
+            fallback: "let \(who) run “\(command)” on \(repository)"
+        )
+    }
+
+    /// The first use of a pending session.
+    static func session(program: String, repositories: [String], folder: String, started: Date) -> Prompt {
+        let repositories = repositoryWords(repositories)
+        let folder = displayFolder(folder)
+        let started = clockTime(started)
+        return Prompt(
+            title: "Allow \(program) to work on \(repositories)?",
+            message: "Until it quits. It can also open issues in your other repositories.",
+            rows: [
+                Row(symbol: "folder", text: folder, label: "Folder"),
+                Row(symbol: "clock", text: "Started at \(started)"),
+            ],
+            fallback: "let \(program) use \(repositories) until it quits, "
+                + "and open issues in your other repos (started \(started) in \(folder))"
+        )
+    }
+
+    /// A use of an issue-only token for a public repository outside the session.
+    static func publicIssue(program: String, command: String, repository: String) -> Prompt {
+        Prompt(
+            title: "Allow \(program) to post in \(repository)?",
+            message: "This repository is public: anyone can see what it posts.",
+            rows: [Row(symbol: "terminal", text: command, monospaced: true, label: "Command")],
+            fallback: "let \(program) run “\(command)” on public \(repository)"
+        )
+    }
+
+    /// `elevate`: tokens for the repositories include workflows for a while.
+    static func elevation(repositories: [String], seconds: TimeInterval) -> Prompt {
+        let names = repositoryWords(repositories)
+        let secrets = repositories.count == 1 ? "your repository’s secrets" : "your repositories’ secrets"
+        return Prompt(
+            title: "Allow your agents to change workflows in \(names)?",
+            message: "For \(durationWords(seconds)). Workflows can use \(secrets).",
+            fallback: "let your agents change workflows in \(names) for \(durationWords(seconds))"
+        )
+    }
+
+    /// One use of an account's own token; `repository` is nil for commands outside one, such as `gh api user`.
+    static func acting(as account: String, by who: String, command: String, repository: String?) -> Prompt {
+        var rows = [Row(symbol: "terminal", text: command, monospaced: true, label: "Command")]
+        if let repository {
+            rows.append(Row(symbol: "book.closed", text: repository, label: "Repository"))
+        }
+        return Prompt(
+            title: "Allow \(who) to act as \(account)?",
+            message: "With \(account)’s own token, for this command only.",
+            rows: rows,
+            fallback: "let \(who) act as \(account): “\(command)”\(repository.map { " on \($0)" } ?? "")"
+        )
+    }
+
+    /// `app create`: the App GitHub just made.
+    static func newApp(_ slug: String, owner: String) -> Prompt {
+        Prompt(
+            title: "Store the GitHub App \(slug) for \(owner)?",
+            message: "Agents will act as this App on \(owner)’s repositories.",
+            fallback: "store the new GitHub App \(slug) for \(owner)"
+        )
+    }
+
+    /// `app set`: asked before GitHub is, so the App's name is not known yet.
+    static func appKey(owner: String) -> Prompt {
+        Prompt(
+            title: "Store a GitHub App for \(owner)?",
+            message: "Agents will act as this App on \(owner)’s repositories.",
+            fallback: "store the GitHub App key for \(owner)"
+        )
+    }
+
+    /// `user add`.
+    static func accountToken(_ login: String) -> Prompt {
+        Prompt(
+            title: "Store \(login)’s GitHub token?",
+            message: "Every use will ask for Touch ID.",
+            fallback: "store a GitHub token for \(login)"
+        )
+    }
+}
+
+/// "push to", "clone", "read": what a command (`git push`, `gh pr create`) does to a repository; "use" when it cannot
+/// be told.
+func repositoryVerb(_ command: String) -> String {
+    switch command {
+    case "git push":
+        return "push to"
+    case "git clone":
+        return "clone"
+    case "git fetch", "git pull", "git ls-remote":
+        return "read"
+    case "gh pr create":
+        return "open a pull request in"
+    case "gh pr merge":
+        return "merge a pull request in"
+    case "gh issue create":
+        return "open an issue in"
+    default:
+        return "use"
+    }
+}
 
 /// Processes that only pass a request along: shells, Git, gh, gh-touchid and launchers.
 private let plumbingNames: Set<String> = shellNames.union([
