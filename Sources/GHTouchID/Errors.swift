@@ -62,27 +62,35 @@ enum ToolError: Error, CustomStringConvertible {
 
     static let usageText = """
     Usage:
+      gh-touchid app create <owner> [--name <name>] [--no-open]
       gh-touchid app set <owner> --client-id <id> < private-key.pem
-      gh-touchid set [--owner <owner>]
+      gh-touchid user add <login>
+      gh-touchid user remove <login>
       gh-touchid gh <arguments...>
       gh-touchid git-credential <get|store|erase>
-      gh-touchid me <command> [arguments...]
+      gh-touchid as <login> <command> [arguments...]
       gh-touchid session [--repo <owner/name>]...
       gh-touchid elevate --for <duration> [--repo <owner/name>]...
       gh-touchid status
       gh-touchid lock
 
-    `app set` stores the owner's GitHub App (its client ID and PKCS#1 private key, read from stdin) after
-    Touch ID and checks it with GitHub. `gh` and Git then act as that App with a short-lived token limited
-    to one repository and without the workflows permission.
-    `set` stores your own GitHub token for an owner (the current repository's by default) from hidden input
-    or stdin; `me` runs a command with it: `me gh ...` directly, anything else with GH_TOUCHID_AS=me.
+    `app create` makes a GitHub App for an owner from a manifest in your browser (--no-open prints the URL
+    instead) and stores it; `app set` stores one made by hand (client ID, PKCS#1 private key on stdin). Both
+    ask for Touch ID and check the key with GitHub. `gh` and Git then act as the owner's App with a
+    short-lived token limited to one repository and without the workflows permission; for an owner without
+    an App they refuse before asking for Touch ID.
+    `user add` stores a token of one of your GitHub accounts (hidden input or stdin) once GitHub confirms
+    its login; `user remove` deletes it. `as` runs a command as that account, with Touch ID on every use:
+    `as <login> gh ...` directly, anything else with GH_TOUCHID_AS=<login>, which gh and Git honour.
     `gh` runs GitHub CLI with a token; `git-credential` is Git's HTTPS credential helper.
-    Each use asks for Touch ID, except inside a session: `session` registers the process that ran it; the
-    first use of a listed repository from that process or its children asks once, then the rest of its
-    life needs no Touch ID. Without --repo, `session` and `elevate` take the current repository.
+    Each use asks for Touch ID, except inside a session: `session` registers the program that ran it
+    (looking past shells that only run a command or a script); its first GitHub use asks once, then it and
+    everything it starts get tokens for its repositories without Touch ID until it exits, and issue-only
+    tokens for other repositories your Apps are installed on (public ones ask per use). Without --repo,
+    `session` takes the outermost Git repository here and those nested up to two levels below it whose
+    owner has an App, and `elevate` takes the current repository.
     `elevate` lets tokens for the repositories include workflows for a while (30m, 8h, 1h30m, at most 1d).
-    `status` lists sessions and elevations; `lock` ends them all now.
+    `status` lists stored Apps and accounts, sessions and elevations; `lock` ends sessions and elevations.
     Every use is logged to ~/Library/Logs/gh-touchid/access.log.
     """
 }
