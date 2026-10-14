@@ -84,8 +84,8 @@ struct Authorization {
     /// nil only when acting as an account and no repository could be told.
     let repository: String?
     let grant: Grant
-    /// What asked, in dialog words: `gh pr list`, `git push`.
-    let command: String
+    /// What asked, as the dialog shows it: `gh pr list`, `git push`, with what gh-touchid could tell about it.
+    let use: Use
     let forGit: Bool
     let chain: String
 
@@ -94,19 +94,19 @@ struct Authorization {
     }
 }
 
-/// Touch ID or session approval for one use of `repository` by `command`, as `account` when one is given.
-func authorizeUse(repository: String?, command: String, account: String?, forGit: Bool) throws -> Authorization {
+/// Touch ID or session approval for one use of `repository` by `use`, as `account` when one is given.
+func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool) throws -> Authorization {
     let chain = processChain(getpid())
     let target = repository ?? "no repository"
     func authorized(_ grant: Grant) -> Authorization {
-        Authorization(repository: repository, grant: grant, command: command, forGit: forGit, chain: chain)
+        Authorization(repository: repository, grant: grant, use: use, forGit: forGit, chain: chain)
     }
     do {
         if let account {
             guard hasUserToken(login: account) else {
                 throw ToolError.missingAccount(account)
             }
-            try authenticate(.acting(as: account, by: requester(), command: command, repository: repository))
+            try authenticate(.acting(as: account, by: requester(), use: use, repository: repository))
             return authorized(.account(account))
         }
         guard let repository else {
@@ -128,7 +128,7 @@ func authorizeUse(repository: String?, command: String, account: String?, forGit
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
         fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
-        try authenticate(.appUse(by: requester(), command: command, repository: repository))
+        try authenticate(.appUse(by: requester(), use: use, repository: repository, app: appSlug(owner: owner)))
         return authorized(.app(session: nil))
     } catch {
         appendAccessLog("refused \(target) to \(chain): \(error)")
@@ -191,7 +191,12 @@ private func issueOnlyCredential(
                 "\(repository) is public and outside the session; Git reads it without a credential"
             )
         }
-        try authenticate(.publicIssue(program: session.program, command: authorization.command, repository: repository))
+        try authenticate(.publicIssue(
+            by: Requester(name: session.program, folder: session.folder),
+            use: authorization.use,
+            repository: repository,
+            app: appSlug(owner: ownerAccount(repository))
+        ))
     } catch {
         revokeAfterUse(credential, repository: repository)
         throw error

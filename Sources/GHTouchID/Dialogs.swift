@@ -1,95 +1,179 @@
 import Foundation
 
-// Words for Touch ID dialogs. They name the program that asked, the command and the repositories in plain words; the
-// full process chain goes to the access log instead.
+// Words for Touch ID dialogs. They show what gh-touchid can see itself: the program that asked and its folder, the
+// command and its arguments, Git, the repositories and the App; the full process chain goes to the access log.
 
-/// What a Touch ID dialog asks. The approval window shows the title (a question), the message (one short sentence)
-/// and the rows; `fallback` is for macOS's own sheet, "gh-touchid is trying to <fallback>.", where no window can be
+/// What a Touch ID dialog asks. The approval window shows the rows (`action`, `repo`, …, `scope`) and Touch ID with
+/// `allowLabel`; `fallback` is for macOS's own sheet, "gh-touchid is trying to <fallback>.", where no window can be
 /// shown, and for the test build's `AUTH:` line.
 struct Prompt {
-    struct Row {
-        /// An SF Symbol.
-        let symbol: String
-        let text: String
-        var monospaced = false
-        /// What VoiceOver says before the text, when the text alone does not say what it is.
-        var label: String?
+    enum Emphasis {
+        case normal
+        /// What is asked for and of what: semibold.
+        case strong
+        /// Scopes and risks: orange.
+        case warning
     }
 
-    let title: String
-    let message: String
-    var rows: [Row] = []
+    struct Row {
+        /// Lowercase, e.g. `repo`.
+        let key: String
+        /// One line or several.
+        let value: String
+        var emphasis = Emphasis.normal
+    }
+
+    let rows: [Row]
+    /// The words beside Touch ID: `allow once`.
+    let allowLabel: String
     let fallback: String
 }
 
+/// The program that asked and the folder it runs in.
+struct Requester {
+    let name: String
+    let folder: String?
+
+    /// `agent · ~/code/widget`.
+    var from: String {
+        folder.map { "\(name) · \(displayFolder($0))" } ?? name
+    }
+}
+
+/// What a command asks a token for, as far as gh-touchid can tell from its arguments and Git.
+struct Use {
+    /// `git push`, `gh pr create`: the command in dialog words.
+    let command: String
+    /// gh only: the command and the rest of its arguments, at most 60 characters.
+    var commandLine: String?
+    /// git push only: where it pushes, e.g. `fix-login` or `delete old-branch`.
+    var branch: String?
+    /// gh only: `--title` of a pull request or issue.
+    var title: String?
+    /// gh only: the first lines of `--body`, or `from <file>` for `--body-file`.
+    var body: String?
+}
+
 extension Prompt {
-    /// One use of an App token outside any session.
-    static func appUse(by who: String, command: String, repository: String) -> Prompt {
-        Prompt(
-            title: "Allow \(who) to \(repositoryVerb(command)) \(repository)?",
-            message: "As your \(ownerAccount(repository)) bot, for this command only.",
-            rows: [Row(symbol: "terminal", text: command, monospaced: true, label: "Command")],
-            fallback: "let \(who) run “\(command)” on \(repository)"
+    /// One use of an App token outside any session; `app` is the App's slug when it is known.
+    static func appUse(by requester: Requester, use: Use, repository: String, app: String?) -> Prompt {
+        var rows = [
+            Row(key: "action", value: actionWords(use.command), emphasis: .strong),
+            Row(key: "repo", value: repository, emphasis: .strong),
+        ]
+        if use.command == "git push", let branch = use.branch {
+            rows.append(Row(key: "branch", value: branch))
+        }
+        if ["gh pr create", "gh issue create"].contains(use.command), let title = use.title {
+            rows.append(Row(key: "title", value: title))
+        }
+        if let commandLine = use.commandLine {
+            rows.append(Row(key: "command", value: commandLine))
+        }
+        rows += [
+            Row(key: "from", value: requester.from),
+            Row(key: "as", value: botWords(app, owner: ownerAccount(repository))),
+            Row(key: "scope", value: "once", emphasis: .warning),
+        ]
+        return Prompt(
+            rows: rows,
+            allowLabel: "allow once",
+            fallback: "let \(requester.name) run “\(use.command)” on \(repository)"
         )
     }
 
     /// The first use of a pending session.
     static func session(program: String, repositories: [String], folder: String, started: Date) -> Prompt {
-        let repositories = repositoryWords(repositories)
-        let folder = displayFolder(folder)
-        let started = clockTime(started)
+        let names = repositoryWords(repositories)
+        let shownFolder = displayFolder(folder)
+        let time = clockTime(started)
         return Prompt(
-            title: "Allow \(program) to work on \(repositories)?",
-            message: "Until it quits. It can also open issues in your other repositories.",
             rows: [
-                Row(symbol: "folder", text: folder, label: "Folder"),
-                Row(symbol: "clock", text: "Started at \(started)"),
+                Row(key: "action", value: "use github", emphasis: .strong),
+                Row(key: "repos", value: repositoryLines(repositories), emphasis: .strong),
+                Row(key: "also", value: "open issues in your other repos"),
+                Row(key: "from", value: Requester(name: program, folder: folder).from),
+                Row(key: "started", value: time),
+                Row(key: "scope", value: "until \(program) quits", emphasis: .warning),
             ],
-            fallback: "let \(program) use \(repositories) until it quits, "
-                + "and open issues in your other repos (started \(started) in \(folder))"
+            allowLabel: "allow until \(program) quits",
+            fallback: "let \(program) use \(names) until it quits, "
+                + "and open issues in your other repos (started \(time) in \(shownFolder))"
         )
     }
 
-    /// A use of an issue-only token for a public repository outside the session.
-    static func publicIssue(program: String, command: String, repository: String) -> Prompt {
-        Prompt(
-            title: "Allow \(program) to post in \(repository)?",
-            message: "This repository is public: anyone can see what it posts.",
-            rows: [Row(symbol: "terminal", text: command, monospaced: true, label: "Command")],
-            fallback: "let \(program) run “\(command)” on public \(repository)"
+    /// A use of an issue-only token for a public repository outside the session, by the session's program.
+    static func publicIssue(by requester: Requester, use: Use, repository: String, app: String?) -> Prompt {
+        var rows = [
+            Row(key: "action", value: issueActionWords(use.command), emphasis: .strong),
+            Row(key: "repo", value: repository, emphasis: .strong),
+            Row(key: "visibility", value: "public, anyone can read it", emphasis: .warning),
+        ]
+        if let title = use.title {
+            rows.append(Row(key: "title", value: title))
+        }
+        if let body = use.body {
+            rows.append(Row(key: "body", value: body))
+        }
+        rows += [
+            Row(key: "from", value: requester.from),
+            Row(key: "as", value: botWords(app, owner: ownerAccount(repository))),
+            Row(key: "scope", value: "once", emphasis: .warning),
+        ]
+        return Prompt(
+            rows: rows,
+            allowLabel: "allow once",
+            fallback: "let \(requester.name) run “\(use.command)” on public \(repository)"
         )
     }
 
     /// `elevate`: tokens for the repositories include workflows for a while.
-    static func elevation(repositories: [String], seconds: TimeInterval) -> Prompt {
-        let names = repositoryWords(repositories)
-        let secrets = repositories.count == 1 ? "your repository’s secrets" : "your repositories’ secrets"
+    static func elevation(repositories: [String], seconds: TimeInterval, by requester: Requester) -> Prompt {
+        let duration = durationWords(seconds)
         return Prompt(
-            title: "Allow your agents to change workflows in \(names)?",
-            message: "For \(durationWords(seconds)). Workflows can use \(secrets).",
-            fallback: "let your agents change workflows in \(names) for \(durationWords(seconds))"
+            rows: [
+                Row(key: "action", value: "change workflows", emphasis: .strong),
+                Row(key: "repos", value: repositoryLines(repositories), emphasis: .strong),
+                Row(key: "risk", value: "workflows can read secrets", emphasis: .warning),
+                Row(key: "from", value: requester.from),
+                Row(key: "scope", value: duration, emphasis: .warning),
+            ],
+            allowLabel: "allow for \(duration)",
+            fallback: "let your agents change workflows in \(repositoryWords(repositories)) for \(duration)"
         )
     }
 
     /// One use of an account's own token; `repository` is nil for commands outside one, such as `gh api user`.
-    static func acting(as account: String, by who: String, command: String, repository: String?) -> Prompt {
-        var rows = [Row(symbol: "terminal", text: command, monospaced: true, label: "Command")]
+    static func acting(as account: String, by requester: Requester, use: Use, repository: String?) -> Prompt {
+        var rows = [Row(key: "action", value: actionWords(use.command), emphasis: .strong)]
         if let repository {
-            rows.append(Row(symbol: "book.closed", text: repository, label: "Repository"))
+            rows.append(Row(key: "repo", value: repository, emphasis: .strong))
         }
+        rows.append(Row(key: "as", value: "\(account) (your account)", emphasis: .strong))
+        if let commandLine = use.commandLine {
+            rows.append(Row(key: "command", value: commandLine))
+        }
+        rows += [
+            Row(key: "from", value: requester.from),
+            Row(key: "scope", value: "once", emphasis: .warning),
+        ]
         return Prompt(
-            title: "Allow \(who) to act as \(account)?",
-            message: "With \(account)’s own token, for this command only.",
             rows: rows,
-            fallback: "let \(who) act as \(account): “\(command)”\(repository.map { " on \($0)" } ?? "")"
+            allowLabel: "allow once",
+            fallback: "let \(requester.name) act as \(account): “\(use.command)”\(repository.map { " on \($0)" } ?? "")"
         )
     }
 
     /// `app create`: the App GitHub just made.
     static func newApp(_ slug: String, owner: String) -> Prompt {
         Prompt(
-            title: "Store the GitHub App \(slug) for \(owner)?",
-            message: "Agents will act as this App on \(owner)’s repositories.",
+            rows: [
+                Row(key: "action", value: "store app key", emphasis: .strong),
+                Row(key: "owner", value: owner, emphasis: .strong),
+                Row(key: "app", value: slug),
+                Row(key: "scope", value: "until removed", emphasis: .warning),
+            ],
+            allowLabel: "allow",
             fallback: "store the new GitHub App \(slug) for \(owner)"
         )
     }
@@ -97,8 +181,12 @@ extension Prompt {
     /// `app set`: asked before GitHub is, so the App's name is not known yet.
     static func appKey(owner: String) -> Prompt {
         Prompt(
-            title: "Store a GitHub App for \(owner)?",
-            message: "Agents will act as this App on \(owner)’s repositories.",
+            rows: [
+                Row(key: "action", value: "store app key", emphasis: .strong),
+                Row(key: "owner", value: owner, emphasis: .strong),
+                Row(key: "scope", value: "until removed", emphasis: .warning),
+            ],
+            allowLabel: "allow",
             fallback: "store the GitHub App key for \(owner)"
         )
     }
@@ -106,32 +194,71 @@ extension Prompt {
     /// `user add`.
     static func accountToken(_ login: String) -> Prompt {
         Prompt(
-            title: "Store \(login)’s GitHub token?",
-            message: "Every use will ask for Touch ID.",
+            rows: [
+                Row(key: "action", value: "store token", emphasis: .strong),
+                Row(key: "account", value: login, emphasis: .strong),
+                Row(key: "scope", value: "until removed", emphasis: .warning),
+            ],
+            allowLabel: "allow",
             fallback: "store a GitHub token for \(login)"
         )
     }
 }
 
-/// "push to", "clone", "read": what a command (`git push`, `gh pr create`) does to a repository; "use" when it cannot
-/// be told.
-func repositoryVerb(_ command: String) -> String {
+/// `push`, `open pull request`, `run view`: what a command (`git push`, `gh pr create`, `gh run view`) does, in the
+/// window's words; otherwise its words without `git` or `gh`.
+func actionWords(_ command: String) -> String {
     switch command {
     case "git push":
-        return "push to"
+        return "push"
     case "git clone":
         return "clone"
     case "git fetch", "git pull", "git ls-remote":
         return "read"
     case "gh pr create":
-        return "open a pull request in"
+        return "open pull request"
     case "gh pr merge":
-        return "merge a pull request in"
+        return "merge pull request"
     case "gh issue create":
-        return "open an issue in"
+        return "open issue"
+    case "gh issue comment", "gh pr comment":
+        return "comment"
     default:
-        return "use"
+        let words = command.split(separator: " ", maxSplits: 1)
+        return words.count == 2 ? String(words[1]) : command
     }
+}
+
+/// What a command does with an issue-only token: `open issue`, `comment on issue`, or `use issues`.
+private func issueActionWords(_ command: String) -> String {
+    switch command {
+    case "gh issue create":
+        return "open issue"
+    case "gh issue comment":
+        return "comment on issue"
+    case "gh pr comment":
+        return "comment on pull request"
+    default:
+        return "use issues"
+    }
+}
+
+/// `acme-agent (bot)`, or `acme's app (bot)` when the App's slug is not stored.
+private func botWords(_ slug: String?, owner: String) -> String {
+    "\(slug ?? "\(owner)'s app") (bot)"
+}
+
+/// One repository per line, the owner only on the first when all share it; at most six lines.
+private func repositoryLines(_ repositories: [String]) -> String {
+    let owners = Set(repositories.map(ownerAccount))
+    var lines = repositories
+    if owners.count == 1, repositories.count > 1 {
+        lines = [repositories[0]] + repositories.dropFirst().map(repositoryName)
+    }
+    if lines.count > 6 {
+        lines = lines.prefix(5) + ["and \(lines.count - 5) more"]
+    }
+    return lines.joined(separator: "\n")
 }
 
 /// Processes that only pass a request along: shells, Git, gh, gh-touchid and launchers.
@@ -140,21 +267,21 @@ private let plumbingNames: Set<String> = shellNames.union([
     "env", "nix", "xargs", "timeout", "nohup", "time", "sudo", "script",
 ])
 
-/// The program that asked: the nearest ancestor that is not plumbing, e.g. `omp` for
-/// `git-remote-https < git < git < omp`.
-func requester() -> String {
+/// The program that asked, and its folder: the nearest ancestor that is not plumbing, e.g. `agent` for
+/// `git-remote-https < git < git < agent`.
+func requester() -> Requester {
     for pid in lineage(getppid()) {
         let name = processName(pid)
         if !plumbingNames.contains(name), !name.hasPrefix("git-") {
-            return printable(name)
+            return Requester(name: printable(name), folder: processFolder(pid))
         }
     }
-    return "a program"
+    return Requester(name: "a program", folder: nil)
 }
 
-/// `git push`, `git clone`: the Git command a credential request comes from, read from the outermost `git` above
-/// the transport that asked; `git` when it cannot be told.
-func gitAction() -> String {
+/// The Git command a credential request comes from (`git push`, `git clone`; `git` when it cannot be told) and, for
+/// `git push`, where it pushes; read from the outermost `git` above the transport that asked.
+func gitUse() -> Use {
     var outermost: pid_t?
     for pid in lineage(getppid()) {
         let name = processName(pid)
@@ -165,7 +292,7 @@ func gitAction() -> String {
         }
     }
     guard let pid = outermost, let arguments = processArguments(pid) else {
-        return "git"
+        return Use(command: "git")
     }
     let valued: Set<String> = ["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"]
     var index = 1
@@ -176,16 +303,85 @@ func gitAction() -> String {
         } else if argument.hasPrefix("-") {
             index += 1
         } else {
-            return "git \(printable(argument))"
+            let command = "git \(printable(argument))"
+            guard argument == "push" else {
+                return Use(command: command)
+            }
+            let folder = processFolder(pid)
+            return Use(command: command, branch: pushDestination(Array(arguments[(index + 1)...]), folder: folder))
         }
     }
-    return "git"
+    return Use(command: "git")
+}
+
+/// Where `git push <arguments>` pushes: the destinations of its refspecs (`fix-login` for `fix-login`,
+/// `HEAD:fix-login` or `+main:fix-login`; `delete x` for `--delete x` or `:x`), or without one the current branch of
+/// the repository in `folder`; nil when it cannot be told, as for `--all`.
+private func pushDestination(_ arguments: [String], folder: String?) -> String? {
+    let valued: Set<String> = ["--repo", "-o", "--push-option", "--receive-pack", "--exec"]
+    var deleting = false
+    var positional: [String] = []
+    var index = 0
+    var endOfOptions = false
+    while index < arguments.count {
+        let argument = arguments[index]
+        index += 1
+        if endOfOptions || !argument.hasPrefix("-") || argument == "-" {
+            positional.append(argument)
+        } else if argument == "--" {
+            endOfOptions = true
+        } else if valued.contains(argument) {
+            index += 1
+        } else if argument == "--delete" || argument == "-d" {
+            deleting = true
+        } else if ["--all", "--branches", "--mirror", "--tags"].contains(argument) {
+            return nil
+        }
+    }
+    let refspecs = positional.dropFirst() // the first is the remote
+    func current() -> String? {
+        folder.flatMap { gitOutput(["-C", $0, "symbolic-ref", "--short", "-q", "HEAD"]) }
+    }
+    guard !refspecs.isEmpty else {
+        return deleting ? nil : current().map { printable($0) }
+    }
+    var destinations: [String] = []
+    for refspec in refspecs {
+        var spec = Substring(refspec)
+        if spec.hasPrefix("+") {
+            spec = spec.dropFirst()
+        }
+        var deletes = deleting
+        var destination = spec
+        if let colon = spec.firstIndex(of: ":") {
+            deletes = deletes || colon == spec.startIndex
+            destination = spec[spec.index(after: colon)...]
+        }
+        var name = String(destination)
+        if name.hasPrefix("refs/heads/") {
+            name.removeFirst("refs/heads/".count)
+        }
+        if name == "HEAD" || name.isEmpty {
+            guard let branch = current() else {
+                return nil
+            }
+            name = branch
+        }
+        destinations.append(deletes ? "delete \(name)" : name)
+    }
+    return printable(destinations.joined(separator: ", "))
 }
 
 /// `gh pr list`, `gh api repos/o/r/pulls`: gh and its first two words that are not flags (a leading
 /// `-R owner/name` is skipped with its value), at most 60 characters.
 func ghAction(_ arguments: [String]) -> String {
-    var words: [String] = []
+    let words = ghCommandWords(arguments).map { arguments[$0] }
+    return shortened((["gh"] + words).joined(separator: " "))
+}
+
+/// Where the words of `ghAction` are in `arguments`.
+private func ghCommandWords(_ arguments: [String]) -> [Int] {
+    var words: [Int] = []
     var index = 0
     while index < arguments.count, words.count < 2 {
         let argument = arguments[index]
@@ -197,15 +393,78 @@ func ghAction(_ arguments: [String]) -> String {
             break
         }
         if !argument.hasPrefix("-") {
-            words.append(argument)
+            words.append(index)
         } else if !words.isEmpty {
             break // flags after the command: its own options, not more of its name
         }
         index += 1
     }
-    let text = (["gh"] + words).joined(separator: " ")
-    let shown = text.count > 60 ? String(text.prefix(59)) + "…" : text
-    return printable(shown)
+    return words
+}
+
+/// What `gh <arguments>` asks for: its command, its command line (the command's words, then the other arguments,
+/// quoted where needed) and, for creating or commenting, its `--title` and `--body`.
+func ghUse(_ arguments: [String]) -> Use {
+    let command = ghAction(arguments)
+    let words = ghCommandWords(arguments)
+    let rest = arguments.indices.filter { !words.contains($0) }.map { shellQuoted(arguments[$0]) }
+    var use = Use(
+        command: command,
+        commandLine: shortened((["gh"] + words.map { arguments[$0] } + rest).joined(separator: " "))
+    )
+    guard ["gh pr create", "gh issue create", "gh issue comment", "gh pr comment"].contains(command) else {
+        return use
+    }
+    let options = arguments.prefix { $0 != "--" }
+    use.title = textOption(options, long: "title", short: "t").map { shortened($0, limit: 100) }
+    if let file = textOption(options, long: "body-file", short: "F") {
+        use.body = "from \(shortened(file))"
+    } else if let body = textOption(options, long: "body", short: "b") {
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
+        var shown = lines.prefix(3).map { shortened(String($0), limit: 80) }
+        if lines.count > 3, let last = shown.popLast() {
+            shown.append(last + " …")
+        }
+        use.body = shown.joined(separator: "\n")
+    }
+    return use
+}
+
+/// The value of the last `--<long> v`, `--<long>=v`, `-<short> v` or `-<short>v` in `arguments`.
+private func textOption(_ arguments: ArraySlice<String>, long: String, short: Character) -> String? {
+    var value: String?
+    var index = arguments.startIndex
+    while index < arguments.endIndex {
+        let argument = arguments[index]
+        index += 1
+        if argument == "--\(long)" || argument == "-\(short)" {
+            if index < arguments.endIndex {
+                value = arguments[index]
+                index += 1
+            }
+        } else if argument.hasPrefix("--\(long)=") {
+            value = String(argument.dropFirst(long.count + 3))
+        } else if argument.hasPrefix("-\(short)"), !argument.hasPrefix("--") {
+            let inline = argument.dropFirst(2)
+            value = String(inline.hasPrefix("=") ? inline.dropFirst() : inline)
+        }
+    }
+    return value
+}
+
+/// `'two words'`: an argument as a shell would need it typed; others as they are.
+private func shellQuoted(_ argument: String) -> String {
+    let plain = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_./:=@,+%^"))
+    if !argument.isEmpty, argument.unicodeScalars.allSatisfy(plain.contains) {
+        return argument
+    }
+    return "'" + argument.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+/// Printable text on one line, at most `limit` characters (the last an ellipsis when cut).
+private func shortened(_ text: String, limit: Int = 60) -> String {
+    let line = printable(text, limit: text.count)
+    return line.count > limit ? String(line.prefix(limit - 1)) + "…" : line
 }
 
 /// `acme/one, two and three`: the owner once when all share it, at most three names.

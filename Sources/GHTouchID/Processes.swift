@@ -28,6 +28,17 @@ func parentProcess(_ pid: pid_t) -> pid_t? {
     processInfo(pid).map { pid_t($0.pbi_ppid) }
 }
 
+/// The current folder of a process of this user, or nil when it cannot be read.
+func processFolder(_ pid: pid_t) -> String? {
+    var info = proc_vnodepathinfo()
+    let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else {
+        return nil
+    }
+    let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+    return path.isEmpty ? nil : path
+}
+
 /// When a process started; with its pid it names one process even after the pid is reused.
 struct ProcessStart: Equatable {
     let seconds: UInt64

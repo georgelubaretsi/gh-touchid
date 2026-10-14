@@ -112,7 +112,7 @@ func runGitHub(_ arguments: [String], account: String?) throws -> Int32 {
     let cli = try gitHubCLI()
     let authorization = try authorizeUse(
         repository: repository,
-        command: ghAction(arguments),
+        use: ghUse(arguments),
         account: account,
         forGit: false
     )
@@ -162,7 +162,7 @@ private func gitCredential(_ arguments: [String]) throws -> Int32 {
         }
         let authorization = try authorizeUse(
             repository: repository,
-            command: gitAction(),
+            use: gitUse(),
             account: account,
             forGit: true
         )
@@ -240,7 +240,7 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
     }
     let seconds = try parseDuration(durations[0])
     let repositories = try repositoriesOption(options)
-    try authenticate(.elevation(repositories: repositories, seconds: seconds))
+    try authenticate(.elevation(repositories: repositories, seconds: seconds, by: requester()))
     try ensureAgent()
     let reply = agentRequest(["op": "elevate", "repos": repositories, "seconds": seconds])
     guard reply?["ok"] as? Bool == true else {

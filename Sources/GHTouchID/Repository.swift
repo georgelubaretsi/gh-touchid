@@ -4,27 +4,33 @@ private let nameCharacters = CharacterSet.alphanumerics.union(CharacterSet(chara
 
 /// `owner/name` of the github.com `origin` of the Git repository in `folder` (by default the current one).
 func repositoryIdentifier(in folder: String? = nil) throws -> String {
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["git"] + (folder.map { ["-C", $0] } ?? []) + ["remote", "get-url", "origin"]
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-
-    do {
-        try process.run()
-    } catch {
-        throw ToolError.missingRepository
-    }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-
-    guard process.terminationStatus == 0,
-          let raw = String(data: data, encoding: .utf8),
-          let repository = gitHubRepository(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+    let arguments = (folder.map { ["-C", $0] } ?? []) + ["remote", "get-url", "origin"]
+    guard let remote = gitOutput(arguments), let repository = gitHubRepository(remote) else {
         throw ToolError.missingRepository
     }
     return repository
+}
+
+/// What `git <arguments>` prints, trimmed, when it succeeds; nil otherwise.
+func gitOutput(_ arguments: [String]) -> String? {
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["git"] + arguments
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 /// `owner/name` from a github.com URL (`https://github.com/o/r.git`, `git@github.com:o/r`), or nil.
