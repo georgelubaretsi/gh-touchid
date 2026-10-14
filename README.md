@@ -221,8 +221,21 @@ Example `.envrc`:
 use flake
 ```
 
-The package pins `gh` at build time and ignores `GH_TOUCHID_GH`. A development build of the sources (`swiftc
+The package pins `gh` at build time and ignores `GH_TOUCHID_GH`. A development build of the sources (`xcrun swiftc
 Sources/GHTouchID/*.swift`) runs `GH_TOUCHID_GH` or the `gh` on PATH.
+
+### Building
+
+gh-touchid is built with the Swift compiler of Xcode 27.0, which Nix cannot provide: install Xcode 27.0 at
+`/Applications/Xcode.app` and build with Nix's sandbox off or relaxed (`sandbox = false` or `sandbox = relaxed` in
+`nix.conf`; the package sets `__noChroot`). The build stops, naming the Xcode it needs, when it finds another
+version. For an Xcode installed elsewhere, or another version at your own risk, override the package:
+
+```nix
+gh-touchid.packages.${system}.default.override {
+  xcode = { version = "27.0"; path = "/Applications/Xcode-27.0.app"; };
+}
+```
 
 ## AI agent usage
 

@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name your stored accounts to act as instead.
 - **Breaking:** the Git credential helper answers only Git's HTTPS transport, so `git credential fill` gets nothing;
   configure it per owner in the global Git config with `credential.useHttpPath=true` (see the README).
+- **Breaking:** building needs Xcode 27.0 (at `/Applications/Xcode.app`, or wherever the package's `xcode` argument
+  points) and Nix's sandbox off or relaxed; nixpkgs' Swift can no longer build gh-touchid, and the development shell
+  no longer provides it.
 - `gh` and Git pick the repository from `-R`/`--repo` (including `HOST/OWNER/REPO` and URLs) or `GH_REPO` before
   the current repository; Git uses the repository in the URL. When a flag right before `-R` might take a value,
   gh-touchid reads which flags take values from the pinned `gh`'s `help reference`, only for such ambiguous commands;
