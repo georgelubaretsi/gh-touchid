@@ -13,7 +13,7 @@ func run() throws -> Int32 {
         print(ToolError.usageText)
         return 0
     case "app":
-        return try setApp(rest)
+        return try appCommand(rest)
     case "user":
         return try userCommand(rest)
     case "gh":
@@ -48,12 +48,31 @@ func run() throws -> Int32 {
     }
 }
 
-/// `app set <owner> --client-id <id>` with the PKCS#1 key on stdin.
-private func setApp(_ arguments: [String]) throws -> Int32 {
-    guard arguments.count >= 2, arguments[0] == "set", let owner = validOwner(arguments[1]) else {
+/// `app create <owner> [--name <name>] [--no-open]`, or `app set <owner> --client-id <id>` with the PKCS#1 key on
+/// stdin.
+private func appCommand(_ arguments: [String]) throws -> Int32 {
+    guard arguments.count >= 2, let owner = validOwner(arguments[1]) else {
         throw ToolError.usage
     }
-    let options = try parseOptions(Array(arguments.dropFirst(2)), allowed: ["--client-id"])
+    switch arguments[0] {
+    case "create":
+        var options = Array(arguments.dropFirst(2))
+        let open = !options.contains("--no-open")
+        options.removeAll { $0 == "--no-open" }
+        let names = try parseOptions(options, allowed: ["--name"])["--name"] ?? ["\(owner)-agent"]
+        guard names.count == 1, let name = names.first, !name.isEmpty, printable(name, limit: 100) == name else {
+            throw ToolError.input("--name takes one App name")
+        }
+        return try createApp(owner: owner, name: name, openBrowser: open)
+    case "set":
+        return try setApp(owner: owner, Array(arguments.dropFirst(2)))
+    default:
+        throw ToolError.usage
+    }
+}
+
+private func setApp(owner: String, _ arguments: [String]) throws -> Int32 {
+    let options = try parseOptions(arguments, allowed: ["--client-id"])
     guard let values = options["--client-id"], values.count == 1,
           let clientId = values.first, !clientId.isEmpty,
           clientId.unicodeScalars.allSatisfy({ (0x21 ... 0x7E).contains($0.value) }) else {

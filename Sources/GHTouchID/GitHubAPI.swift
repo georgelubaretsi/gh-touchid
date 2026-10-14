@@ -94,6 +94,15 @@ func tokenOwner(_ token: String) throws -> (login: String, scopes: String?) {
     return (login, response.header("X-OAuth-Scopes"))
 }
 
+/// Whether `owner` is an organization (`GET /users/{owner}` `type`), asked without a credential.
+func isOrganization(_ owner: String) throws -> Bool {
+    let response = try githubAPI("GET", "/users/\(owner)", bearer: nil)
+    guard response.status == 200, let type = response.object?["type"] as? String else {
+        throw ToolError.github("cannot find the GitHub account \(owner) (HTTP \(response.status): \(response.message))")
+    }
+    return type == "Organization"
+}
+
 /// Whether `repository` is private (`GET /repos/{owner}/{repo}` with a token that can read it).
 func isPrivateRepository(_ repository: String, token: String) throws -> Bool {
     let response = try githubAPI("GET", "/repos/\(repository)", bearer: token)

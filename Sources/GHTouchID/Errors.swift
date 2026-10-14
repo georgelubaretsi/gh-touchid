@@ -32,7 +32,7 @@ enum ToolError: Error, CustomStringConvertible {
         case let .missingAccount(login):
             return "no token is stored for the account \(login); run `gh-touchid user add \(login)` first"
         case let .missingApp(owner):
-            return "no GitHub App is stored for \(owner); run `gh-touchid app set \(owner) --client-id <id> < key.pem` first"
+            return "no GitHub App is stored for \(owner); run `gh-touchid app create \(owner)` first"
         case let .noApp(owner, logins, program):
             let accounts = logins.isEmpty
                 ? "none stored yet; add one with `gh-touchid user add <login>`"

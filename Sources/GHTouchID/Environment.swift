@@ -47,6 +47,30 @@ func apiBaseURL() throws -> String {
 #endif
 }
 
+/// GitHub's web pages, without a trailing slash (in test builds: the mock API, which plays them too).
+func webBaseURL() throws -> String {
+#if GH_TOUCHID_TESTING
+    return try apiBaseURL()
+#else
+    return "https://github.com"
+#endif
+}
+
+/// Opens `url` in the default browser; test builds print `OPEN: <url>` instead.
+func openInBrowser(_ url: String) {
+#if GH_TOUCHID_TESTING
+    fputs("OPEN: \(url)\n", stderr)
+#else
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    process.arguments = [url]
+    guard (try? process.run()) != nil else {
+        return
+    }
+    process.waitUntilExit()
+#endif
+}
+
 /// Whether Git asks for a github.com credential over HTTPS (in test builds: for the mock API's own host).
 func isGitHubCredentialRequest(protocol scheme: String?, host: String?) -> Bool {
 #if GH_TOUCHID_TESTING
