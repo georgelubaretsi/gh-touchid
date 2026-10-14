@@ -35,10 +35,12 @@ func repositorySelectorIsAmbiguous(_ arguments: [String]) -> Bool {
     return false
 }
 
-/// The value of the first `-R`/`--repo` before `--`, read the way gh's flag parser (pflag) reads `arguments`:
-/// `--x v`, `--x=v`, `-x v`, `-xv`, `-x=v`, and groups of short flags in which the first flag that takes a value
-/// takes the rest of the group, or the next argument. An unknown short flag ends its group: gh would refuse it.
+/// The value of the last `-R`/`--repo` before `--` (gh acts on the last one), read the way gh's flag parser (pflag)
+/// reads `arguments`: `--x v`, `--x=v`, `-x v`, `-xv`, `-x=v`, and groups of short flags in which the first flag that
+/// takes a value takes the rest of the group, or the next argument. An unknown short flag ends its group: gh would
+/// refuse it.
 func repositorySelector(_ arguments: [String], flags: CommandFlags) throws -> String? {
+    var selected: String?
     var index = 0
     while index < arguments.count {
         let argument = arguments[index]
@@ -68,7 +70,7 @@ func repositorySelector(_ arguments: [String], flags: CommandFlags) throws -> St
                 break
             }
             if name == "repo" {
-                return value
+                selected = value
             }
             continue
         }
@@ -93,12 +95,12 @@ func repositorySelector(_ arguments: [String], flags: CommandFlags) throws -> St
                 break
             }
             if shorthand == "R" {
-                return value
+                selected = value
             }
             break
         }
     }
-    return nil
+    return selected
 }
 
 /// The flags of the command `arguments` run, from `gh help reference` of the gh that will run; nil when the reference
