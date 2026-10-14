@@ -6,7 +6,8 @@ import Foundation
 // 2. Inside an approved session that lists R: a token from the App without Touch ID.
 // 3. Inside a pending session that lists R: one Touch ID approves the session, then as 2.
 // 4. Anything else: Touch ID naming the command and who asked, then one token from the App.
-// App tokens include `workflows` only while R is elevated. Every outcome is logged with the process chain.
+// App tokens include `workflows` only if R is elevated when the token is minted, which is after any dialog.
+// Every outcome is logged with the process chain.
 
 struct GitHubCredential {
     let token: String
@@ -66,21 +67,27 @@ func actingAsOwner() throws -> Bool {
     return true
 }
 
-/// A token for `repository`, for `command` (shown in Touch ID dialogs).
-func obtainCredential(repository: String, command: String, asOwner: Bool) throws -> GitHubCredential {
+/// A use of a repository that Touch ID or a session allowed; the token is issued separately, right after.
+struct Authorization {
+    let repository: String
+    let asOwner: Bool
+    /// `you`, `session prog[pid]` or `once`, for the log.
+    let grant: String
+    let chain: String
+}
+
+/// Touch ID or session approval for one use of `repository` by `command` (shown in Touch ID dialogs).
+func authorizeUse(repository: String, command: String, asOwner: Bool) throws -> Authorization {
     let chain = processChain(getpid())
     do {
         if asOwner {
             try authenticate(reason: "run \(command) as you on \(repository)")
-            let token = try loadOwnToken(owner: ownerAccount(repository))
-            appendAccessLog("granted \(repository) (you) to \(chain)")
-            return GitHubCredential(token: token, expires: nil)
+            return Authorization(repository: repository, asOwner: true, grant: "you", chain: chain)
         }
 
-        let reply = agentRequest(["op": "check", "repo": repository])
-        let elevated = reply?["elevated"] as? Bool == true
         let grant: String
-        if let session = SessionInfo(reply?["session"]), session.covers(repository) {
+        if let session = SessionInfo(agentRequest(["op": "check", "repo": repository])?["session"]),
+           session.covers(repository) {
             if !session.approved {
                 try awaitApproval(of: session)
             }
@@ -91,11 +98,31 @@ func obtainCredential(repository: String, command: String, asOwner: Bool) throws
             )
             grant = "once"
         }
-        let token = try mintInstallationToken(repository: repository, includeWorkflows: elevated)
-        appendAccessLog("granted \(repository) (\(grant))\(elevated ? ", elevated" : "") to \(chain)")
-        return GitHubCredential(token: token.token, expires: token.expires)
+        return Authorization(repository: repository, asOwner: false, grant: grant, chain: chain)
     } catch {
         appendAccessLog("refused \(repository) to \(chain): \(error)")
+        throw error
+    }
+}
+
+/// The token for an authorized use: your own, or a new one from the App.
+func issueCredential(_ authorization: Authorization) throws -> GitHubCredential {
+    let repository = authorization.repository
+    do {
+        if authorization.asOwner {
+            let token = try loadOwnToken(owner: ownerAccount(repository))
+            appendAccessLog("granted \(repository) (you) to \(authorization.chain)")
+            return GitHubCredential(token: token, expires: nil)
+        }
+        // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
+        let elevated = agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true
+        let token = try mintInstallationToken(repository: repository, includeWorkflows: elevated)
+        appendAccessLog(
+            "granted \(repository) (\(authorization.grant))\(elevated ? ", elevated" : "") to \(authorization.chain)"
+        )
+        return GitHubCredential(token: token.token, expires: token.expires)
+    } catch {
+        appendAccessLog("refused \(repository) to \(authorization.chain): \(error)")
         throw error
     }
 }

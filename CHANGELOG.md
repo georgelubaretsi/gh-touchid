@@ -11,12 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `gh` and Git act as a GitHub App per owner, stored with `gh-touchid app set <owner> --client-id <id>` (the
   App's PKCS#1 private key on stdin, checked with GitHub). Every use gets its own token for one repository, without
-  the `workflows` permission; the token `gh` used is revoked when it exits, also after Ctrl-C.
+  the `workflows` permission; the token `gh` used is revoked when it exits, also when gh-touchid is interrupted or
+  terminated (it passes SIGINT, SIGQUIT, SIGHUP and SIGTERM on to `gh`).
 - `gh-touchid session [--repo <owner/name>]...` registers the process that ran it. Its first GitHub use asks for
   Touch ID once; then it and everything it starts work without Touch ID for those repositories until it exits.
   Several first uses at once share one dialog.
 - `gh-touchid elevate --for <duration> [--repo <owner/name>]...` lets tokens for the repositories include
-  `workflows` for up to a day.
+  `workflows` for up to a day. It counts when a token is minted, after any Touch ID dialog.
 - `gh-touchid me <command>` runs a command with your own token (`me gh …` directly; anything else with
   `GH_TOUCHID_AS=me`, which `gh` and Git then honour), with Touch ID per use.
 - The access log records every use, granted or refused, with the process chain, plus sessions registered, approved

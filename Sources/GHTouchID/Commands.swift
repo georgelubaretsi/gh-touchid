@@ -97,13 +97,22 @@ private func runGitHub(_ arguments: [String], asOwner: Bool) throws -> Int32 {
         throw ToolError.forbiddenCommand
     }
     let repository = try requestedRepository(arguments)
-    let credential = try obtainCredential(
+    let cli = try gitHubCLI()
+    let authorization = try authorizeUse(
         repository: repository,
         command: commandSummary(["gh"] + arguments),
         asOwner: asOwner
     )
+    // from the mint until the revoke, a signal is remembered or passed on to gh instead of ending gh-touchid
+    let relay = SignalRelay()
+    defer { relay.remove() }
+    let credential = try issueCredential(authorization)
     defer { revokeAfterUse(credential, repository: repository) }
-    return try runGitHubCLI(arguments: arguments, token: credential.token)
+    if let number = relay.received {
+        fputs("gh-touchid: stopped by signal \(number) before gh started\n", stderr)
+        return 128 + number
+    }
+    return try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay)
 }
 
 /// `me gh …` runs gh with your own token; `me <command> …` runs the command with GH_TOUCHID_AS=me.
@@ -150,11 +159,12 @@ private func gitCredential(_ arguments: [String]) throws -> Int32 {
         } else {
             repository = try repositoryIdentifier()
         }
-        let credential = try obtainCredential(
+        let authorization = try authorizeUse(
             repository: repository,
             command: "Git over HTTPS",
             asOwner: actingAsOwner()
         )
+        let credential = try issueCredential(authorization)
         var lines = ["username=x-access-token", "password=\(credential.token)"]
         if let expires = credential.expires {
             lines.append("password_expiry_utc=\(Int(expires.timeIntervalSince1970))")

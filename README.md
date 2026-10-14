@@ -127,7 +127,9 @@ gh-touchid elevate --for 30m --repo owner/one
 ```
 
 `--for` takes `30m`, `8h`, `1h30m` or `1d` (the longest). Each `--repo` names one repository; without one, the
-current repository is elevated. Running `elevate` again sets a new end time.
+current repository is elevated. Running `elevate` again sets a new end time. Elevation counts when a token is minted,
+which is after any Touch ID dialog, so a command still waiting on a dialog when the elevation ends or `lock` runs
+gets a token without `workflows`.
 
 ## Status and lock
 
@@ -216,8 +218,9 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
 ## Security model
 
 - App tokens cover one repository, last about an hour, and leave out `workflows` unless the repository is elevated.
-  The token of a `gh` command is revoked when `gh` exits (also after Ctrl-C); tokens given to Git are not revoked and
-  run out on their own.
+  The token of a `gh` command is revoked when `gh` exits; SIGINT, SIGQUIT, SIGHUP and SIGTERM sent to gh-touchid
+  are passed on to `gh` and the token is still revoked (SIGKILL leaves it to run out). Tokens given to Git are not
+  revoked and run out on their own.
 - Tokens are never cached or written to disk, and never exported to the calling shell. `gh` gets one through
   `GH_TOKEN` with a fresh empty `GH_CONFIG_DIR`; Git gets one through its credential-helper pipe, and only when the
   request comes from Git's HTTPS transport (`git-remote-https`) with stdout not a terminal.

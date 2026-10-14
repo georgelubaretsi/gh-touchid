@@ -1,13 +1,19 @@
 import Darwin
 import Foundation
 
+/// How to start gh: an executable and the arguments that precede gh's own.
+struct GitHubCLI {
+    let executable: URL
+    let prefix: [String]
+}
+
 /// The `gh` to run: the one pinned at build time, or in a development build GH_TOUCHID_GH or `gh` on PATH.
-private func gitHubCLI() throws -> (URL, [String]) {
+func gitHubCLI() throws -> GitHubCLI {
     if pinnedGitHubCLI.hasPrefix("/") {
         guard FileManager.default.isExecutableFile(atPath: pinnedGitHubCLI) else {
             throw ToolError.missingGitHubCLI(pinnedGitHubCLI)
         }
-        return (URL(fileURLWithPath: pinnedGitHubCLI), [])
+        return GitHubCLI(executable: URL(fileURLWithPath: pinnedGitHubCLI), prefix: [])
     }
 
     if let configured = ProcessInfo.processInfo.environment["GH_TOUCHID_GH"] {
@@ -15,9 +21,9 @@ private func gitHubCLI() throws -> (URL, [String]) {
               FileManager.default.isExecutableFile(atPath: configured) else {
             throw ToolError.missingGitHubCLI(configured)
         }
-        return (URL(fileURLWithPath: configured), [])
+        return GitHubCLI(executable: URL(fileURLWithPath: configured), prefix: [])
     }
-    return (URL(fileURLWithPath: "/usr/bin/env"), ["gh"])
+    return GitHubCLI(executable: URL(fileURLWithPath: "/usr/bin/env"), prefix: ["gh"])
 }
 
 /// Commands that would print the token, store it elsewhere, or run code gh-touchid does not know about.
@@ -43,9 +49,78 @@ func isForbiddenGitHubCommand(_ arguments: [String]) -> Bool {
     }
 }
 
-/// Runs gh with `token`, in a fresh empty configuration directory, and returns its exit status.
-func runGitHubCLI(arguments: [String], token: String) throws -> Int32 {
-    let (executable, prefix) = try gitHubCLI()
+/// While it exists, SIGINT, SIGQUIT, SIGHUP and SIGTERM no longer end gh-touchid, so that it can revoke the token it
+/// minted: one that arrives before gh starts is remembered (and gh is not started), one that arrives while gh runs is
+/// passed on to it. Signals reach this object through dispatch sources, outside any signal handler. SIGPIPE is
+/// survived too, so a closed stderr cannot end gh-touchid before the revoke.
+final class SignalRelay: @unchecked Sendable {
+    private static let relayed = [SIGINT, SIGQUIT, SIGHUP, SIGTERM]
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "gh-touchid.signals")
+    private var sources: [DispatchSourceSignal] = []
+    private var child: pid_t = 0
+    private var pending: Int32?
+
+    init() {
+        // handlers rather than SIG_IGN, which gh would inherit; gh starts with the default actions again
+        signal(SIGPIPE) { _ in }
+        for number in Self.relayed {
+            signal(number) { _ in }
+            let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
+            source.setEventHandler { [self] in relay(number) }
+            source.resume()
+            sources.append(source)
+        }
+    }
+
+    /// The first signal that arrived while gh was not running.
+    var received: Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return pending
+    }
+
+    /// gh now runs as `pid`; a signal that arrived just before it started is passed on now.
+    func attach(_ pid: pid_t) {
+        lock.lock()
+        defer { lock.unlock() }
+        child = pid
+        if let number = pending {
+            kill(pid, number)
+        }
+    }
+
+    /// gh has exited; later signals are only remembered.
+    func detach() {
+        lock.lock()
+        defer { lock.unlock() }
+        child = 0
+    }
+
+    /// Restores the default actions.
+    func remove() {
+        for source in sources {
+            source.cancel()
+        }
+        for number in Self.relayed + [SIGPIPE] {
+            signal(number, SIG_DFL)
+        }
+    }
+
+    private func relay(_ number: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        if child > 0 {
+            kill(child, number)
+        } else if pending == nil {
+            pending = number
+        }
+    }
+}
+
+/// Runs gh with `token`, in a fresh empty configuration directory, and returns its exit status. `relay` passes
+/// signals on to gh while it runs.
+func runGitHubCLI(_ cli: GitHubCLI, arguments: [String], token: String, relay: SignalRelay) throws -> Int32 {
     let configDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gh-touchid-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(
@@ -56,8 +131,8 @@ func runGitHubCLI(arguments: [String], token: String) throws -> Int32 {
     defer { try? FileManager.default.removeItem(at: configDirectory) }
 
     let process = Process()
-    process.executableURL = executable
-    process.arguments = prefix + arguments
+    process.executableURL = cli.executable
+    process.arguments = cli.prefix + arguments
     process.standardInput = FileHandle.standardInput
     process.standardOutput = FileHandle.standardOutput
     process.standardError = FileHandle.standardError
@@ -70,24 +145,14 @@ func runGitHubCLI(arguments: [String], token: String) throws -> Int32 {
     environment.removeValue(forKey: "GH_ENTERPRISE_TOKEN")
     process.environment = environment
 
-    // Ctrl-C, Ctrl-\ and a closing terminal reach gh too; gh-touchid outlives it so the token can be revoked.
-    // A handler, unlike SIG_IGN, is reset to the default in gh itself.
-    let terminalSignals = [SIGINT, SIGQUIT, SIGHUP]
-    for number in terminalSignals {
-        signal(number) { _ in }
-    }
-    defer {
-        for number in terminalSignals {
-            signal(number, SIG_DFL)
-        }
-    }
-
     do {
         try process.run()
     } catch {
-        throw ToolError.missingGitHubCLI(executable.path)
+        throw ToolError.missingGitHubCLI(cli.executable.path)
     }
+    relay.attach(process.processIdentifier)
     process.waitUntilExit()
+    relay.detach()
 
     if process.terminationReason == .uncaughtSignal {
         return 128 + process.terminationStatus
