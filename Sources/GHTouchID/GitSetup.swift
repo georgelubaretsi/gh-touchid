@@ -315,34 +315,80 @@ func credentialHelpers(for url: String) -> [String]? {
 
 /// Whether `helper` is `!<path> git-credential` with a path, or a name found on PATH, that resolves to this executable.
 func runsThisGitCredential(_ helper: String) -> Bool {
-    guard helper.hasPrefix("!"), let own = ownRealExecutablePath else {
+    guard helper.hasPrefix("!"), let own = ownRealExecutablePath,
+          let words = shellWords(helper.dropFirst()), words.count == 2, words[1] == "git-credential" else {
         return false
     }
-    var rest = helper.dropFirst().drop(while: { $0 == " " })
-    let command: Substring
-    if rest.hasPrefix("'") {
-        rest = rest.dropFirst()
-        guard let end = rest.firstIndex(of: "'") else {
-            return false
-        }
-        command = rest[..<end]
-        rest = rest[rest.index(after: end)...]
-    } else {
-        command = rest.prefix(while: { $0 != " " })
-        rest = rest.dropFirst(command.count)
-    }
-    guard rest.trimmingCharacters(in: .whitespaces) == "git-credential" else {
-        return false
-    }
-    let path = command.contains("/") ? String(command) : commandsOnPath(String(command)).first
+    let path = words[0].contains("/") ? words[0] : commandsOnPath(words[0]).first
     return path.flatMap(realPath) == own
 }
 
 /// A helper as gh-touchid names it: its program, without arguments, which might hold a secret.
 func helperName(_ helper: String) -> String {
-    let command = (helper.hasPrefix("!") ? helper.dropFirst() : Substring(helper)).drop(while: { $0 == " " })
-    let word = command.hasPrefix("'")
-        ? command.dropFirst().prefix(while: { $0 != "'" })
-        : command.prefix(while: { $0 != " " })
-    return printable((String(word) as NSString).lastPathComponent, limit: 60)
+    let command = helper.hasPrefix("!") ? helper.dropFirst() : Substring(helper)
+    let word = shellWords(command)?.first
+        ?? String(command.drop(while: { $0 == " " }).prefix(while: { $0 != " " }))
+    return printable((word as NSString).lastPathComponent, limit: 60)
+}
+
+/// The words the shell makes of `text`, its quoting undone as for `shellQuoted`'s: single quotes, double quotes (in
+/// which a backslash escapes `"`, `\`, `$` and a backquote) and backslashes outside quotes. Nil for an unterminated
+/// quote; anything else the shell would expand stays as it is.
+private func shellWords(_ text: Substring) -> [String]? {
+    var words: [String] = []
+    var word = ""
+    var inWord = false
+    var index = text.startIndex
+    while index < text.endIndex {
+        let character = text[index]
+        index = text.index(after: index)
+        switch character {
+        case " ", "\t", "\n":
+            if inWord {
+                words.append(word)
+                word = ""
+                inWord = false
+            }
+        case "'":
+            inWord = true
+            guard let end = text[index...].firstIndex(of: "'") else {
+                return nil
+            }
+            word += text[index..<end]
+            index = text.index(after: end)
+        case "\"":
+            inWord = true
+            var closed = false
+            while index < text.endIndex {
+                let inner = text[index]
+                index = text.index(after: index)
+                if inner == "\"" {
+                    closed = true
+                    break
+                }
+                if inner == "\\", index < text.endIndex, "\"\\$`".contains(text[index]) {
+                    word.append(text[index])
+                    index = text.index(after: index)
+                } else {
+                    word.append(inner)
+                }
+            }
+            guard closed else {
+                return nil
+            }
+        case "\\":
+            inWord = true
+            if index < text.endIndex {
+                word.append(text[index])
+                index = text.index(after: index)
+            }
+        default:
+            inWord = true
+            word.append(character)
+        }
+    }
+    if inWord {
+        words.append(word)
+    }
+    return words
 }
