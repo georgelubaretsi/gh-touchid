@@ -1,0 +1,185 @@
+# Builds the release tarball on pull requests that touch what goes into it, and on version tags; a tag also publishes
+# it: the GitHub release, the formula in georgelubaretsi/homebrew-tap and the Nix pin in release/nix.json on main.
+name: Release
+
+on:
+  pull_request:
+    paths:
+      - Sources/**
+      - scripts/**
+      - release/**
+      - Package.swift
+      - .github/workflows/release.yml
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and check the tarball
+    # The macOS 26 (arm64) image comes with Xcode 26.0.1 to 26.6 side by side; the build takes 26.6 by its path
+    # (actions/runner-images: images/macos/macos-26-arm64-Readme.md).
+    runs-on: macos-26
+    permissions:
+      contents: read
+    env:
+      XCODE: /Applications/Xcode_26.6.app
+      XCODE_VERSION: "26.6"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The flake reads the same constant for its package version.
+      - name: Check the tag against the version
+        if: github.ref_type == 'tag'
+        run: |
+          version="$(sed -n 's/^let toolVersion = "\([^"]*\)"$/\1/p' Sources/GHTouchID/BuildConfiguration.swift)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag $GITHUB_REF_NAME does not match toolVersion $version in BuildConfiguration.swift"
+            exit 1
+          fi
+
+      - name: Build and package
+        run: scripts/package.sh --output dist --xcode "$XCODE" --xcode-version "$XCODE_VERSION"
+
+      - name: Run gh-touchid from the unpacked tarball
+        run: |
+          set -euo pipefail
+          tarball="$(echo dist/gh-touchid-*-macos.tar.gz)"
+          name="$(basename "$tarball" .tar.gz)"
+          mkdir "$RUNNER_TEMP/unpacked" "$RUNNER_TEMP/bin"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/unpacked"
+          root="$RUNNER_TEMP/unpacked/$name"
+          # Linked from another folder, as Homebrew links bin/ into its Cellar
+          ln -s "$root/bin/gh-touchid" "$root/bin/gh" "$RUNNER_TEMP/bin/"
+          lipo -info "$root/bin/gh-touchid" "$root/libexec/gh-touchid/gh"
+          "$RUNNER_TEMP/bin/gh-touchid" help
+          version="$("$RUNNER_TEMP/bin/gh-touchid" version)"
+          echo "gh-touchid version: $version"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::gh-touchid version prints $version for the tag $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Check the bundled gh's SHA-256
+        run: |
+          set -euo pipefail
+          expected="$(shasum -a 256 "$ROOT/libexec/gh-touchid/gh" | cut -d ' ' -f 1)"
+          echo "libexec/gh-touchid/gh: $expected"
+          for architecture in arm64 x86_64; do
+            lipo -thin "$architecture" "$ROOT/bin/gh-touchid" -output "$RUNNER_TEMP/gh-touchid-$architecture"
+            if ! grep -q -a -F "$expected" "$RUNNER_TEMP/gh-touchid-$architecture"; then
+              echo "::error::the $architecture gh-touchid does not pin the bundled gh's SHA-256"
+              exit 1
+            fi
+          done
+          # A changed gh is refused, through a link, before anything else happens.
+          cp -R "$ROOT" "$RUNNER_TEMP/changed"
+          printf '\n' >> "$RUNNER_TEMP/changed/libexec/gh-touchid/gh"
+          ln -s "$RUNNER_TEMP/changed/bin/gh-touchid" "$RUNNER_TEMP/gh-touchid-changed"
+          if output="$("$RUNNER_TEMP/gh-touchid-changed" gh -R octocat/hello-world api user 2>&1)"; then
+            echo "::error::gh-touchid ran a changed gh"
+            exit 1
+          fi
+          echo "$output"
+          case "$output" in
+            *"the gh next to gh-touchid was changed"*) ;;
+            *) echo "::error::gh-touchid did not refuse the changed gh as expected"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gh-touchid-macos
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gh-touchid-macos
+          path: dist
+
+      - name: Check the tarball against its SHA-256
+        working-directory: dist
+        run: sha256sum --check ./*.tar.gz.sha256
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # The CHANGELOG section of this version, if there is one
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' source/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "See CHANGELOG.md." > "$RUNNER_TEMP/notes.md"
+          fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "gh-touchid $version" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "dist/gh-touchid-$version-macos.tar.gz" "dist/gh-touchid-$version-macos.tar.gz.sha256"
+
+      - name: Update the Homebrew tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha256="$(cut -d ' ' -f 1 "dist/gh-touchid-$version-macos.tar.gz.sha256")"
+          ssh="$RUNNER_TEMP/tap-ssh"
+          trap 'rm -rf "$ssh"' EXIT
+          install -d -m 700 "$ssh"
+          (umask 077 && printf '%s\n' "$TAP_DEPLOY_KEY" > "$ssh/key")
+          # github.com's Ed25519 host key, as GitHub publishes it ("GitHub's SSH key fingerprints")
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            > "$ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh/known_hosts -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519"
+          git clone git@github.com:georgelubaretsi/homebrew-tap.git "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Formula"
+          sed -e "s/@VERSION@/$version/g" -e "s/@SHA256@/$sha256/g" source/release/gh-touchid.rb.in \
+            > "$RUNNER_TEMP/tap/Formula/gh-touchid.rb"
+          cd "$RUNNER_TEMP/tap"
+          git add Formula/gh-touchid.rb
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "gh-touchid $version"
+          git push origin HEAD:refs/heads/main
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: main
+
+      - name: Pin the release for Nix
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha256="$(cut -d ' ' -f 1 "dist/gh-touchid-$version-macos.tar.gz.sha256")"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/gh-touchid-$version-macos.tar.gz"
+          printf '{\n  "version": "%s",\n  "url": "%s",\n  "sha256": "%s"\n}\n' "$version" "$url" "$sha256" \
+            > main/release/nix.json
+          cd main
+          git add release/nix.json
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Pin release $version"
+          git push origin HEAD:main
