@@ -15,6 +15,9 @@ private final class AuthenticationResult: @unchecked Sendable {
 func authenticate(_ prompt: Prompt) throws {
 #if GH_TOUCHID_TESTING
     let environment = ProcessInfo.processInfo.environment
+    if environment["GH_TOUCHID_TEST_SCREEN_LOCKED"] == "1" {
+        throw ToolError.screenLocked
+    }
     fputs("AUTH: \(prompt.fallback)\n", stderr)
     if let delay = environment["GH_TOUCHID_TEST_AUTH_DELAY"].flatMap(Double.init) {
         Thread.sleep(forTimeInterval: delay)
@@ -23,6 +26,10 @@ func authenticate(_ prompt: Prompt) throws {
         throw ToolError.authentication("denied (GH_TOUCHID_TEST_DENY)")
     }
 #else
+    // a locked screen would cancel any dialog at once, which reads as if someone had said no
+    guard !isScreenLocked() else {
+        throw ToolError.screenLocked
+    }
     let context = LAContext()
     context.localizedFallbackTitle = ""
     context.touchIDAuthenticationAllowableReuseDuration = 0
@@ -37,20 +44,28 @@ func authenticate(_ prompt: Prompt) throws {
         )
     }
 
-    if Thread.isMainThread, isOnConsole() {
-        let shown = try MainActor.assumeIsolated {
-            // false when AppKit cannot start, e.g. without a connection to the window server
-            guard NSApplication.shared.setActivationPolicy(.accessory) else {
-                return false
+    do {
+        if Thread.isMainThread, isOnConsole() {
+            let shown = try MainActor.assumeIsolated {
+                // false when AppKit cannot start, e.g. without a connection to the window server
+                guard NSApplication.shared.setActivationPolicy(.accessory) else {
+                    return false
+                }
+                try approveInWindow(prompt, context: context)
+                return true
             }
-            try approveInWindow(prompt, context: context)
-            return true
+            if shown {
+                return
+            }
         }
-        if shown {
-            return
+        try authenticateInSheet(reason: prompt.fallback, context: context)
+    } catch {
+        // the screen locked while the dialog was up: macOS cancelled it, nobody declined
+        if isScreenLocked() {
+            throw ToolError.screenLocked
         }
+        throw error
     }
-    try authenticateInSheet(reason: prompt.fallback, context: context)
 #endif
 }
 
@@ -61,6 +76,14 @@ private func isOnConsole() -> Bool {
         return false
     }
     return session[kCGSessionOnConsoleKey] as? Bool == true
+}
+
+/// Whether the login session's screen is locked (the session dictionary's `CGSSessionScreenIsLocked`).
+private func isScreenLocked() -> Bool {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+        return false
+    }
+    return (session["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true
 }
 
 /// macOS's own Touch ID sheet, "gh-touchid is trying to <reason>."

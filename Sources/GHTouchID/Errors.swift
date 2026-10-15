@@ -2,6 +2,7 @@ enum ToolError: Error, CustomStringConvertible {
     case usage
     case authentication(String)
     case authenticationNotAnswered
+    case screenLocked
     case keychain(String)
     case missingRepository
     case missingAccount(String)
@@ -27,6 +28,8 @@ enum ToolError: Error, CustomStringConvertible {
             return "Touch ID failed: \(message)"
         case .authenticationNotAnswered:
             return "Touch ID was not answered"
+        case .screenLocked:
+            return "the screen is locked, so nobody could approve this; unlock it and run the command again"
         case let .keychain(message):
             return "Keychain error: \(message)"
         case .missingRepository:

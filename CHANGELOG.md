@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which `gh` and Git then honour), with Touch ID on every use, sessions included.
 - The access log records every use, granted or refused, with the process chain, plus sessions registered, approved
   and ended, and elevations.
-- Touch ID dialogs are withdrawn after five minutes without an answer.
+- Touch ID dialogs are withdrawn after five minutes without an answer. While the screen is locked, a request fails at
+  once saying so, instead of looking like a declined Touch ID.
 - Touch ID asks in a small window of its own instead of macOS's sheet: one fact per row (the action, the repository,
   the branch, title, body or command where they apply, the program that asked and its folder, the App's bot or your
   account it acts as, and the scope), nothing shortened (a value too tall scrolls in its own box), the scope and risks

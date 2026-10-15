@@ -227,9 +227,10 @@ key`), the repository, the branch, title or command where they apply, the progra
 duration), with the scope and any risk in orange. Nothing is shortened: every repository, the whole title, body (also
 one given with `--body-file`) and command are shown, and a value too tall for the window scrolls in a box that says how
 many lines it has. Touch the sensor to allow (its control sits beside what you allow, e.g. "allow once"), or press Esc
-or click **deny**; after five minutes without an answer the window closes and the command fails. Where no window can
-be shown, such as over SSH, macOS's own Touch ID sheet asks instead, in one line:
-"gh-touchid is trying to let agent run “git push” on owner/repo."
+or click **deny**; after five minutes without an answer the window closes and the command fails. While the screen is
+locked, nobody can answer, so the command fails at once with "the screen is locked, so nobody could approve this";
+the same happens if the screen locks while a dialog is up. Where no window can be shown, such as over SSH, macOS's own
+Touch ID sheet asks instead, in one line: "gh-touchid is trying to let agent run “git push” on owner/repo."
 
 ## Sessions
 
