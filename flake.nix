@@ -56,19 +56,19 @@
             runHook postBuild
           '';
 
-          # bin/gh-touchid is the executable itself, so that `git-setup` finds it on PATH; bin/gh runs gh through it.
+          # bin/gh-touchid is the executable itself, so that `git-setup` finds it on PATH; libexec/bin/gh runs gh
+          # through it, for those who put libexec/bin on PATH or take `with-gh`.
           installPhase = ''
             runHook preInstall
             install -Dm755 gh-touchid "$out/bin/gh-touchid"
-            printf '#!/bin/sh\nexec %s gh "$@"\n' "$out/bin/gh-touchid" > "$out/bin/gh"
-            chmod 755 "$out/bin/gh"
+            ${installWrapper}
             runHook postInstall
           '';
 
           meta = meta lib;
         };
 
-      # The release tarball pinned in release/nix.json, which the release workflow writes: unpacked as it is, with no
+      # The release tarball pinned in release/nix.json, which the release workflow writes: its files installed with no
       # build tools and nothing outside the store, so it builds with Nix's sandbox on.
       fromRelease =
         pin:
@@ -89,15 +89,27 @@
           # SHA-256 that gh-touchid checks.
           dontFixup = true;
 
+          # bin/gh-touchid and libexec/gh-touchid as released; libexec/bin/gh written as in the source build, so that it
+          # names the executable by its store path.
           installPhase = ''
             runHook preInstall
-            mkdir -p "$out"
-            cp -R bin libexec "$out/"
+            mkdir -p "$out/bin" "$out/libexec"
+            cp bin/gh-touchid "$out/bin/"
+            cp -R libexec/gh-touchid "$out/libexec/"
+            ${installWrapper}
             runHook postInstall
           '';
 
           meta = meta lib;
         };
+
+      # The gh wrapper, libexec/bin/gh: `gh-touchid gh "$@"` with this package's gh-touchid. It stays out of bin/, so
+      # that the package sits beside any other gh; `with-gh` links it as bin/gh.
+      installWrapper = ''
+        install -d "$out/libexec/bin"
+        printf '#!/bin/sh\nexec %s gh "$@"\n' "$out/bin/gh-touchid" > "$out/libexec/bin/gh"
+        chmod 755 "$out/libexec/bin/gh"
+      '';
 
       meta = lib: {
         description = "Touch ID-gated GitHub credentials for macOS";
@@ -110,7 +122,8 @@
       pin = ./release/nix.json;
     in
     {
-      # `default` is the pinned release; before the first one, the build from source.
+      # `default` is the pinned release; before the first one, the build from source. Neither puts a `gh` in bin/;
+      # `with-gh` is `default` plus bin/gh, a link to its gh wrapper, to replace `gh` in a profile.
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
@@ -123,6 +136,14 @@
             else from-source;
           gh-touchid = default;
           inherit from-source;
+          with-gh = pkgs.symlinkJoin {
+            name = "gh-touchid-with-gh-${default.version}";
+            paths = [ default ];
+            postBuild = ''
+              ln -s ${default}/libexec/bin/gh "$out/bin/gh"
+            '';
+            inherit (default) meta;
+          };
         });
 
       devShells = forAllSystems (system:
