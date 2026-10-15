@@ -16,11 +16,26 @@ approved. Your own GitHub accounts are one Touch ID away with `gh-touchid as <lo
 ## Install
 
 gh-touchid runs on macOS 26 (Tahoe) or later, on Apple silicon and Intel Macs, and uses the `git` on your PATH. Every
-way to install it gives you the same release: `gh-touchid`, a `gh` that runs GitHub's CLI through gh-touchid, and
-GitHub's own `gh` for macOS, which gh-touchid keeps next to itself in `libexec/gh-touchid`. gh-touchid checks that
-`gh` by its SHA-256 before each use and lets it run only when the code that starts is GitHub's (see [Security
-model](#security-model)); a changed `gh` there is refused ("the gh next to gh-touchid was changed; reinstall
-gh-touchid").
+way to install it gives you the same release: `gh-touchid`; a `gh` wrapper, `libexec/bin/gh`, that runs GitHub's CLI
+through gh-touchid; and GitHub's own `gh` for macOS, which gh-touchid keeps next to itself in `libexec/gh-touchid`.
+gh-touchid checks that `gh` by its SHA-256 before each use and lets it run only when the code that starts is GitHub's
+(see [Security model](#security-model)); a changed `gh` there is refused ("the gh next to gh-touchid was changed;
+reinstall gh-touchid").
+
+Only `gh-touchid` goes on your PATH, so it installs beside any other `gh`, Homebrew's included. Git goes through
+gh-touchid once you run `gh-touchid git-setup OWNER` (see [Git](#3-git)). `gh` goes through it only if you choose
+one of these:
+
+- Put the wrapper's folder first in PATH, in your shell's profile: every program that runs `gh` with that PATH gets
+  gh-touchid's. The folder for each way to install is below; `gh-touchid status` prints it for yours.
+- `alias gh='gh-touchid gh'`: your own interactive shell only; scripts and agents still find any other `gh`.
+- Run `gh-touchid gh …` yourself.
+
+Uninstalling another `gh` does not make `gh` gh-touchid's: without one of these, `gh` is simply not found. gh-touchid
+never uses another `gh`'s login or configuration; it gives `gh` a fresh configuration and a token of its own. But
+another `gh` that is signed in (`gh auth login`) stays usable by any program running as you, whichever `gh` comes
+first on PATH: run `gh auth logout` with it, or uninstall it, for the full benefit. `gh-touchid status` says which
+`gh` comes first on PATH and whether another one is signed in.
 
 ### Homebrew
 
@@ -28,8 +43,12 @@ gh-touchid").
 brew install georgelubaretsi/tap/gh-touchid
 ```
 
-The formula installs its own `gh`, so it conflicts with Homebrew's `gh` formula: `brew uninstall gh` first.
-gh-touchid never uses `gh`'s own login or configuration; it gives `gh` a fresh configuration and a token of its own.
+It installs beside Homebrew's `gh` formula. To run `gh` through gh-touchid, put the wrapper's folder first in PATH;
+Homebrew's `opt` link keeps the path the same across updates:
+
+```sh
+export PATH="/opt/homebrew/opt/gh-touchid/libexec/bin:$PATH"   # in your shell's profile; /usr/local/opt/… on Intel
+```
 
 ### Release tarball
 
@@ -43,6 +62,7 @@ xattr -d com.apple.quarantine gh-touchid-VERSION-macos.tar.gz   # only for a dow
 mkdir -p ~/.local/gh-touchid
 tar -xzf gh-touchid-VERSION-macos.tar.gz -C ~/.local/gh-touchid --strip-components 1
 export PATH="$HOME/.local/gh-touchid/bin:$PATH"                 # in your shell's profile
+export PATH="$HOME/.local/gh-touchid/libexec/bin:$PATH"         # also, to run `gh` through gh-touchid
 ```
 
 A browser marks what it downloads as quarantined, and `tar` passes the mark on to the files it unpacks; macOS then
@@ -52,8 +72,9 @@ tarball over the old folder the same way.
 
 ### Nix
 
-The flake's default package installs the release tarball: no Xcode, and it builds with Nix's sandbox on. Add it to a
-Darwin development shell:
+The flake's default package installs the release tarball: no Xcode, and it builds with Nix's sandbox on. It holds
+`bin/gh-touchid` and the wrapper in `libexec/bin`, no `bin/gh`. `packages.<system>.with-gh` is the same plus `bin/gh`,
+a link to the wrapper, for replacing `gh` where you install it. Add either to a Darwin development shell:
 
 ```nix
 {
@@ -66,7 +87,7 @@ Darwin development shell:
     in {
       devShells.${system}.default = pkgs.mkShell {
         packages = [
-          gh-touchid.packages.${system}.default
+          gh-touchid.packages.${system}.default   # gh-touchid only; .with-gh for `gh` through it too
           pkgs.git
         ];
       };
@@ -80,9 +101,17 @@ Example `.envrc`:
 use flake
 ```
 
-To install it in your profile instead: `nix profile install github:GeorgeLubaretsi/gh-touchid`. The release it
+To install it in your profile instead:
+
+```sh
+nix profile install github:GeorgeLubaretsi/gh-touchid           # gh-touchid only; `gh` stays as it is
+nix profile install github:GeorgeLubaretsi/gh-touchid#with-gh   # also `gh`, through gh-touchid
+```
+
+`with-gh` cannot share a profile with another package that has `bin/gh`, such as nixpkgs' `gh`. The release Nix
 installs is pinned in `release/nix.json`, which each release updates; until the first release, `default` builds from
-source like `packages.<system>.from-source` (see [Building from source](#building-from-source)).
+source like `packages.<system>.from-source` (see [Building from source](#building-from-source)), which installs the
+same files.
 
 ### Releases are unsigned, for now
 
@@ -189,6 +218,8 @@ the token without Touch ID.
 
 ## Everyday use
 
+With `gh` going through gh-touchid (see [Install](#install)), or as `gh-touchid gh …`, and Git set up for the owner:
+
 ```sh
 gh pr list
 gh pr create --fill
@@ -283,14 +314,20 @@ gets a token without `workflows`.
 
 ```sh
 gh-touchid status    # stored Apps and accounts (names only), for each owner which credential helpers Git asks,
-                     # whether `gh` on PATH is gh-touchid's, sessions (pending or approved, program, folder,
-                     # repositories) and elevations
+                     # which `gh` comes first on PATH (gh-touchid's wrapper, another gh, or none) and whether
+                     # another gh is signed in, sessions (pending or approved, program, folder, repositories) and
+                     # elevations
 gh-touchid lock      # ends every session approval and elevation now
 gh-touchid version   # prints the version
 ```
 
 `status` suggests `gh-touchid git-setup OWNER` when Git asks anything but this gh-touchid for an owner's
-repositories, and which folder to put first in PATH when another `gh` comes first.
+repositories. When the wrapper is not the first `gh` on PATH, it prints the PATH line for this installation (for
+Homebrew the `opt` folder, which stays the same across updates) and the alias. When a `gh` other than the wrapper is on
+PATH and a `gh` is signed in to github.com, it says so: `another gh is signed in as LOGIN: any program can use that
+login; gh auth logout to close it`. It runs no other `gh` to tell: it looks only for an `oauth_token` in gh's
+`hosts.yml` (in `GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh` or `~/.config/gh`) and for gh's Keychain item `gh:github.com`,
+by its attributes, never its secret.
 
 Sessions and elevations live in a small background agent started by `session` or `elevate`. It holds no tokens or
 keys, answers only processes running as you on a socket in your private temporary directory (`getconf
@@ -300,6 +337,14 @@ Every use, granted or refused, is logged to `~/Library/Logs/gh-touchid/access.lo
 asked, e.g. `granted owner/one (session agent[700]), elevated to gh-touchid[812] < git-remote-https[811] < git[810] <
 zsh[790] < agent[700]`, `granted owner/three (issues, session agent[700]) to …` or `granted owner/one (as LOGIN) to …`,
 along with sessions registered, approved and ended, and elevations.
+
+## Upgrading from 0.3.0
+
+0.3.0 put its own `gh` in `bin/`; 0.3.1 and later keep it in `libexec/bin`, off your PATH unless you add it. After
+upgrading, `gh` is whatever other `gh` comes first on PATH, or not found: choose one of the ways in
+[Install](#install) to run it through gh-touchid again. Unpacking a newer tarball over 0.3.0 leaves 0.3.0's `bin/gh`
+behind, still running `gh` through gh-touchid; delete it to use the PATH entry instead. Git, set up with
+`git-setup`, is unaffected.
 
 ## Upgrading from 0.2
 
@@ -346,7 +391,8 @@ This workflow has been tested only with [Oh My Pi (OMP)](https://github.com/can1
 harnesses have not been verified to keep hidden PTY input and Git credential-helper traffic outside model context.
 
 - Agents run ordinary `gh` and Git commands. Inside an approved session they need no Touch ID for the session's
-  repositories and act as the App; anything else asks for Touch ID per use.
+  repositories and act as the App; anything else asks for Touch ID per use. For `gh`, the wrapper's folder must come
+  first in the PATH the agent gets (an alias in your shell does not reach it).
 - Starting a session is the user's decision: the user, or a harness plugin, runs `gh-touchid session` from the
   agent's process (a tool's `sh -c` counts as the agent). The first GitHub use then shows the approval dialog; the
   user decides. Outside a session, gh-touchid prints a hint to stderr with each per-use dialog.
@@ -387,10 +433,13 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   that gh-touchid starts or to Git's transport.
 - The App keys and your accounts' tokens are generic passwords in your login Keychain, available only while this Mac
   is unlocked and never synced. `status`, the hint and the checks before a dialog read only which items exist and the
-  App's name (its slug, kept in the item's comment), never a secret. Releases are not signed and run without the
-  hardened runtime, so the protection is enforced by gh-touchid itself: it asks for Touch ID or checks the session
-  before using them, but macOS lets a process read the items once you allow it in the Keychain dialog or with your
-  account password.
+  App's name (its slug, kept in the item's comment), never a secret; `status` also asks whether gh's own item
+  `gh:github.com` exists, by its attributes alone. Releases are not signed and run without the hardened runtime, so
+  the protection is enforced by gh-touchid itself: it asks for Touch ID or checks the session before using them, but
+  macOS lets a process read the items once you allow it in the Keychain dialog or with your account password.
+- A `gh` signed in on its own (`gh auth login`, with its token in the Keychain or in its `hosts.yml`) is a way to
+  GitHub that gh-touchid does not gate: any program running as you can use that login, whatever `gh` comes first on
+  PATH. `status` says when one is; `gh auth logout` with that `gh` closes it.
 - gh-touchid runs only the `gh` it was built with, and no environment variable changes which one:
   - A release (the tarball, Homebrew, and the flake's default package, which installs the release) bundles GitHub's
     `gh` in `libexec/gh-touchid`, where any program running as you can write, as in all of Homebrew's folders.
