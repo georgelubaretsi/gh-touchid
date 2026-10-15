@@ -10,6 +10,7 @@ enum ToolError: Error, CustomStringConvertible {
     case invalidToken
     case forbiddenCommand
     case missingGitHubCLI(String)
+    case changedGitHubCLI(String)
     case unsafeTerminalOutput
     case notGitTransport
     case input(String)
@@ -45,6 +46,9 @@ enum ToolError: Error, CustomStringConvertible {
             return "this gh command could reveal or replace the token"
         case let .missingGitHubCLI(path):
             return "GitHub CLI is not executable at \(path)"
+        case let .changedGitHubCLI(path):
+            return "the gh next to gh-touchid was changed; reinstall gh-touchid "
+                + "(\(path) is not the gh it was built with)"
         case .unsafeTerminalOutput:
             return "refusing to emit a Git credential to a terminal"
         case .notGitTransport:

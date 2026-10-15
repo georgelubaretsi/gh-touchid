@@ -1,19 +1,39 @@
+import CryptoKit
 import Darwin
 import Foundation
 
-/// How to start gh: an executable and the arguments that precede gh's own.
+/// How to start gh: an executable and the arguments that precede gh's own. `sha256` is the SHA-256 a pinned gh must
+/// still have; nil for a development build's gh.
 struct GitHubCLI {
     let executable: URL
     let prefix: [String]
+    let sha256: String?
+
+    /// Refuses a pinned gh whose file has changed since gh-touchid was built.
+    func verify() throws {
+        guard let sha256 else {
+            return
+        }
+        guard let data = try? Data(contentsOf: executable, options: .alwaysMapped) else {
+            throw ToolError.missingGitHubCLI(executable.path)
+        }
+        let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard actual == sha256 else {
+            throw ToolError.changedGitHubCLI(executable.path)
+        }
+    }
 }
 
-/// The `gh` to run: the one pinned at build time, or in a development build GH_TOUCHID_GH or `gh` on PATH.
+/// The `gh` to run, checked: the one the build pinned (no environment variable changes it), or in a development build
+/// GH_TOUCHID_GH or `gh` on PATH.
 func gitHubCLI() throws -> GitHubCLI {
-    if pinnedGitHubCLI.hasPrefix("/") {
-        guard FileManager.default.isExecutableFile(atPath: pinnedGitHubCLI) else {
-            throw ToolError.missingGitHubCLI(pinnedGitHubCLI)
+    if !pinnedGitHubCLI.hasPrefix("@") {
+        let cli = GitHubCLI(executable: try pinnedGitHubCLIPath(), prefix: [], sha256: pinnedGitHubCLISHA256)
+        guard FileManager.default.isExecutableFile(atPath: cli.executable.path) else {
+            throw ToolError.missingGitHubCLI(cli.executable.path)
         }
-        return GitHubCLI(executable: URL(fileURLWithPath: pinnedGitHubCLI), prefix: [])
+        try cli.verify()
+        return cli
     }
 
     if let configured = ProcessInfo.processInfo.environment["GH_TOUCHID_GH"] {
@@ -21,9 +41,24 @@ func gitHubCLI() throws -> GitHubCLI {
               FileManager.default.isExecutableFile(atPath: configured) else {
             throw ToolError.missingGitHubCLI(configured)
         }
-        return GitHubCLI(executable: URL(fileURLWithPath: configured), prefix: [])
+        return GitHubCLI(executable: URL(fileURLWithPath: configured), prefix: [], sha256: nil)
     }
-    return GitHubCLI(executable: URL(fileURLWithPath: "/usr/bin/env"), prefix: ["gh"])
+    return GitHubCLI(executable: URL(fileURLWithPath: "/usr/bin/env"), prefix: ["gh"], sha256: nil)
+}
+
+/// The pinned gh: its absolute path, or its relative path taken from the folder of gh-touchid's own executable with
+/// symlinks resolved, since Homebrew links `bin/gh-touchid` from elsewhere into its Cellar.
+private func pinnedGitHubCLIPath() throws -> URL {
+    if pinnedGitHubCLI.hasPrefix("/") {
+        return URL(fileURLWithPath: pinnedGitHubCLI)
+    }
+    guard let executable = ownRealExecutablePath else {
+        throw ToolError.missingGitHubCLI(pinnedGitHubCLI)
+    }
+    return URL(fileURLWithPath: executable)
+        .deletingLastPathComponent()
+        .appendingPathComponent(pinnedGitHubCLI)
+        .standardizedFileURL
 }
 
 /// Commands that would print the token, store it elsewhere, or run code gh-touchid does not know about.
@@ -118,8 +153,9 @@ final class SignalRelay: @unchecked Sendable {
     }
 }
 
-/// Runs gh with `token`, in a fresh empty configuration directory, and returns its exit status. `relay` passes
-/// signals on to gh while it runs.
+/// Runs gh with `token`, in a fresh empty configuration directory, and returns its exit status. A pinned gh is checked
+/// again right before it starts, since a Touch ID dialog may have kept it waiting. `relay` passes signals on to gh
+/// while it runs.
 func runGitHubCLI(_ cli: GitHubCLI, arguments: [String], token: String, relay: SignalRelay) throws -> Int32 {
     let configDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gh-touchid-\(UUID().uuidString)", isDirectory: true)
@@ -145,6 +181,7 @@ func runGitHubCLI(_ cli: GitHubCLI, arguments: [String], token: String, relay: S
     environment.removeValue(forKey: "GH_ENTERPRISE_TOKEN")
     process.environment = environment
 
+    try cli.verify()
     do {
         try process.run()
     } catch {

@@ -55,6 +55,7 @@
               --xcode ${lib.escapeShellArg xcode.path} \
               --xcode-version ${lib.escapeShellArg xcode.version} \
               --gh ${gh}/bin/gh \
+              --gh-sha256 "$(sha256sum ${gh}/bin/gh | cut -d ' ' -f 1)" \
               --output gh-touchid
             runHook postBuild
           '';
