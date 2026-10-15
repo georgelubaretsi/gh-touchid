@@ -4,7 +4,7 @@
 # release/gh.json and refused unless its SHA-256 matches the pin:
 #
 #   gh-touchid-<version>-macos/
-#     bin/gh-touchid                  checks libexec/gh-touchid/gh's SHA-256 before it runs it
+#     bin/gh-touchid                  checks libexec/gh-touchid/gh's SHA-256, and its cdhash as gh starts
 #     bin/gh                          runs `gh-touchid gh "$@"`, with the gh-touchid next to it
 #     libexec/gh-touchid/gh           GitHub's gh for macOS (universal, signed by GitHub)
 #     libexec/gh-touchid/gh-LICENSE   gh's license
@@ -65,8 +65,17 @@ mkdir -p "$stage/bin" "$stage/libexec/gh-touchid"
 install -m 755 "$gh" "$stage/libexec/gh-touchid/gh"
 install -m 644 "$work/pkg/Resources/LICENSE" "$stage/libexec/gh-touchid/gh-LICENSE"
 bundled="$(/usr/bin/shasum -a 256 "$stage/libexec/gh-touchid/gh")"
+# The cdhash of each architecture of GitHub's gh: the code the kernel loads when gh starts must have one of them.
+cdhash_arguments=()
+for architecture in arm64 x86_64; do
+  cdhash="$(/usr/bin/codesign -d -vvv --arch "$architecture" "$stage/libexec/gh-touchid/gh" 2>&1 |
+    sed -n 's/^CDHash=//p')" || true
+  [ -n "$cdhash" ] || fail "GitHub's gh has no code signature for $architecture"
+  cdhash_arguments+=(--gh-cdhash "$architecture=$cdhash")
+done
 "$root/scripts/build.sh" ${build_arguments[@]+"${build_arguments[@]}"} \
-  --gh ../libexec/gh-touchid/gh --gh-sha256 "${bundled%% *}" --output "$stage/bin/gh-touchid"
+  --gh ../libexec/gh-touchid/gh --gh-sha256 "${bundled%% *}" "${cdhash_arguments[@]}" \
+  --output "$stage/bin/gh-touchid"
 chmod 755 "$stage/bin/gh-touchid"
 cat > "$stage/bin/gh" <<'EOF'
 #!/bin/sh

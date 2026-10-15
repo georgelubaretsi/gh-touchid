@@ -65,17 +65,22 @@ jobs:
           fi
           echo "ROOT=$root" >> "$GITHUB_ENV"
 
-      - name: Check the bundled gh's SHA-256
+      - name: Check the bundled gh's SHA-256 and cdhashes
         run: |
           set -euo pipefail
-          expected="$(shasum -a 256 "$ROOT/libexec/gh-touchid/gh" | cut -d ' ' -f 1)"
-          echo "libexec/gh-touchid/gh: $expected"
+          gh="$ROOT/libexec/gh-touchid/gh"
+          expected="$(shasum -a 256 "$gh" | cut -d ' ' -f 1)"
+          cdhashes="arm64=$(codesign -d -vvv --arch arm64 "$gh" 2>&1 | sed -n 's/^CDHash=//p')"
+          cdhashes="$cdhashes,x86_64=$(codesign -d -vvv --arch x86_64 "$gh" 2>&1 | sed -n 's/^CDHash=//p')"
+          echo "libexec/gh-touchid/gh: $expected $cdhashes"
           for architecture in arm64 x86_64; do
             lipo -thin "$architecture" "$ROOT/bin/gh-touchid" -output "$RUNNER_TEMP/gh-touchid-$architecture"
-            if ! grep -q -a -F "$expected" "$RUNNER_TEMP/gh-touchid-$architecture"; then
-              echo "::error::the $architecture gh-touchid does not pin the bundled gh's SHA-256"
-              exit 1
-            fi
+            for pin in "$expected" "$cdhashes"; do
+              if ! grep -q -a -F "$pin" "$RUNNER_TEMP/gh-touchid-$architecture"; then
+                echo "::error::the $architecture gh-touchid does not pin $pin"
+                exit 1
+              fi
+            done
           done
           # A changed gh is refused, through a link, before anything else happens.
           cp -R "$ROOT" "$RUNNER_TEMP/changed"

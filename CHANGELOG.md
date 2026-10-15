@@ -87,5 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gh auth` subcommands other than `auth status` are refused, as are `auth status -t` and the `ext`/`extensions`
   aliases of `gh extension`.
 - The background agent and its clients trust each other only when they run the same gh-touchid executable.
-- gh-touchid checks the SHA-256 of the `gh` it ships before minting a token and again right before starting it, and
-  refuses a changed one ("the gh next to gh-touchid was changed; reinstall gh-touchid").
+- gh-touchid checks the SHA-256 of the `gh` it ships before minting a token and refuses a changed one ("the gh next
+  to gh-touchid was changed; reinstall gh-touchid"). A release then starts GitHub's `gh` suspended and lets it run
+  with the token only if the code the kernel loaded has one of the cdhashes pinned at build time; otherwise `gh` is
+  killed before it runs. The Nix build from source relies on the read-only store instead.

@@ -17,8 +17,9 @@ approved. Your own GitHub accounts are one Touch ID away with `gh-touchid as <lo
 
 gh-touchid runs on macOS 26 (Tahoe) or later, on Apple silicon and Intel Macs, and uses the `git` on your PATH. Every
 way to install it gives you the same release: `gh-touchid`, a `gh` that runs GitHub's CLI through gh-touchid, and
-GitHub's own `gh` for macOS, which gh-touchid keeps next to itself in `libexec/gh-touchid` and checks by its SHA-256
-each time before running it. A changed `gh` there is refused ("the gh next to gh-touchid was changed; reinstall
+GitHub's own `gh` for macOS, which gh-touchid keeps next to itself in `libexec/gh-touchid`. gh-touchid checks that
+`gh` by its SHA-256 before each use and lets it run only when the code that starts is GitHub's (see [Security
+model](#security-model)); a changed `gh` there is refused ("the gh next to gh-touchid was changed; reinstall
 gh-touchid").
 
 ### Homebrew
@@ -322,8 +323,9 @@ scripts/package.sh                     # the release tarball in dist/, as the re
 
 `--xcode` picks the Xcode (default `/Applications/Xcode.app`) and `--xcode-version` refuses any other version.
 `scripts/package.sh` downloads GitHub's `gh` for macOS from the release pinned in `release/gh.json`, refuses it unless
-its SHA-256 matches, and builds gh-touchid to run only that `gh`, checked by its SHA-256 (`scripts/build.sh --gh
-../libexec/gh-touchid/gh --gh-sha256 …`). Only development builds honour `GH_TOUCHID_GH`.
+its SHA-256 matches, and builds gh-touchid to run only that `gh`, checked by its SHA-256 and by the cdhashes of its
+two slices (`scripts/build.sh` with `--gh ../libexec/gh-touchid/gh`, `--gh-sha256` and `--gh-cdhash`). Only
+development builds honour `GH_TOUCHID_GH`.
 
 The flake's `packages.<system>.from-source` builds through the same script with Xcode 27.0, which Nix cannot provide,
 and pins nixpkgs' `gh` by its store path and SHA-256: install Xcode 27.0 at `/Applications/Xcode.app` and build with
@@ -388,10 +390,18 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   hardened runtime, so the protection is enforced by gh-touchid itself: it asks for Touch ID or checks the session
   before using them, but macOS lets a process read the items once you allow it in the Keychain dialog or with your
   account password.
-- gh-touchid runs only the `gh` it was built with: in a release, GitHub's `gh` next to it in `libexec/gh-touchid`; in
-  the Nix build from source, nixpkgs' `gh` in the store. It checks that `gh`'s SHA-256 before minting a token and
-  again right before `gh` starts with it, and refuses a changed one, since any program running as you can write to
-  Homebrew's folders. No environment variable changes which `gh` it runs.
+- gh-touchid runs only the `gh` it was built with, and no environment variable changes which one:
+  - A release (the tarball, Homebrew, and the flake's default package, which installs the release) bundles GitHub's
+    `gh` in `libexec/gh-touchid`, where any program running as you can write, as in all of Homebrew's folders.
+    gh-touchid checks that file's SHA-256 before minting a token. It then starts `gh` suspended, before its first
+    instruction, and lets it run only if the code the kernel loaded for it (the slice that runs, natively or under
+    Rosetta) has the code directory hash (cdhash) of GitHub's `gh` pinned at build time; otherwise, or if that
+    cannot be read, `gh` is killed unrun. Replacing the installed `gh` after the check therefore cannot hand the
+    token to another program. GitHub's `gh` runs with the hardened runtime, so a page changed after it starts gets
+    it killed.
+  - The Nix build from source (`packages.<system>.from-source`) runs nixpkgs' `gh` by its store path and checks its
+    SHA-256, without a cdhash: nixpkgs' `gh` is a wrapper script, and the read-only Nix store is what keeps it from
+    being replaced.
 - Everything inside an approved session shares its access: any process the session's root starts, at any depth, gets
   tokens for the session's repositories without Touch ID until the root exits, and can open issues on (and read)
   every private repository your Apps are installed on. Approve sessions for programs you trust, with the

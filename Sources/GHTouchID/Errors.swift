@@ -11,6 +11,7 @@ enum ToolError: Error, CustomStringConvertible {
     case forbiddenCommand
     case missingGitHubCLI(String)
     case changedGitHubCLI(String)
+    case unverifiedGitHubCLI(String)
     case unsafeTerminalOutput
     case notGitTransport
     case input(String)
@@ -49,6 +50,8 @@ enum ToolError: Error, CustomStringConvertible {
         case let .changedGitHubCLI(path):
             return "the gh next to gh-touchid was changed; reinstall gh-touchid "
                 + "(\(path) is not the gh it was built with)"
+        case let .unverifiedGitHubCLI(path):
+            return "cannot tell which code the gh at \(path) started with; it was stopped before it ran"
         case .unsafeTerminalOutput:
             return "refusing to emit a Git credential to a terminal"
         case .notGitTransport:
