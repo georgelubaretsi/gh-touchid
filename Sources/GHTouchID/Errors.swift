@@ -71,6 +71,7 @@ enum ToolError: Error, CustomStringConvertible {
       gh-touchid user add <login>
       gh-touchid user remove <login>
       gh-touchid gh <arguments...>
+      gh-touchid git-setup <owner>
       gh-touchid git-credential <get|store|erase>
       gh-touchid as <login> <command> [arguments...]
       gh-touchid session [--repo <owner/name>]...
@@ -87,7 +88,9 @@ enum ToolError: Error, CustomStringConvertible {
     `user add` stores a token of one of your GitHub accounts (hidden input or stdin) once GitHub confirms
     its login; `user remove` deletes it. `as` runs a command as that account, with Touch ID on every use:
     `as <login> gh ...` directly, anything else with GH_TOUCHID_AS=<login>, which gh and Git honour.
-    `gh` runs GitHub CLI with a token; `git-credential` is Git's HTTPS credential helper.
+    `gh` runs GitHub CLI with a token; `git-credential` is Git's HTTPS credential helper, and `git-setup`
+    makes it the only one Git asks for the owner's repositories (in your global Git configuration; write
+    the owner as in your remotes' URLs).
     Each use asks for Touch ID, except inside a session: `session` registers the program that ran it
     (looking past shells that only run a command or a script); its first GitHub use asks once, then it and
     everything it starts get tokens for its repositories without Touch ID until it exits, and issue-only

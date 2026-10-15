@@ -29,6 +29,8 @@ func run() throws -> Int32 {
         return try userCommand(rest)
     case "gh":
         return try runGitHub(rest, account: actingAccount())
+    case "git-setup":
+        return try gitSetup(rest)
     case "git-credential":
         return try gitCredential(rest)
     case "as":

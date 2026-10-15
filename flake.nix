@@ -22,9 +22,7 @@
         {
           lib,
           stdenvNoCC,
-          makeWrapper,
           gh,
-          git,
           # The Xcode that builds gh-touchid: proprietary, so never in the store; the build calls it where it is
           # installed and refuses any other version.
           xcode ? {
@@ -36,8 +34,6 @@
           pname = "gh-touchid";
           inherit version;
           src = self;
-
-          nativeBuildInputs = [ makeWrapper ];
 
           # Xcode lives outside the store: the build reaches it, so it cannot run in a sandbox (`sandbox = false`
           # or `relaxed`).
@@ -60,14 +56,12 @@
             runHook postBuild
           '';
 
+          # bin/gh-touchid is the executable itself, so that `git-setup` finds it on PATH; bin/gh runs gh through it.
           installPhase = ''
             runHook preInstall
-            install -Dm755 gh-touchid "$out/libexec/gh-touchid"
-            makeWrapper "$out/libexec/gh-touchid" "$out/bin/gh-touchid" \
-              --prefix PATH : "${lib.makeBinPath [ git ]}"
-            makeWrapper "$out/libexec/gh-touchid" "$out/bin/gh" \
-              --prefix PATH : "${lib.makeBinPath [ git ]}" \
-              --add-flags gh
+            install -Dm755 gh-touchid "$out/bin/gh-touchid"
+            printf '#!/bin/sh\nexec %s gh "$@"\n' "$out/bin/gh-touchid" > "$out/bin/gh"
+            chmod 755 "$out/bin/gh"
             runHook postInstall
           '';
 
