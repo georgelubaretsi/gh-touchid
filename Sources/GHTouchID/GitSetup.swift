@@ -113,8 +113,8 @@ private func askInTerminal(_ question: String) -> String? {
     }
 }
 
-/// What `status` says about Git and gh: for each owner the credential helpers Git asks for its repositories, then
-/// whether `gh` on PATH is this gh-touchid's, each with the fix unless it is this gh-touchid alone.
+/// What `status` says about Git and gh: for each owner the credential helpers Git asks for its repositories, each with
+/// the fix unless it is this gh-touchid alone; then which `gh` is first on PATH and whether another gh is signed in.
 func gitStatus(owners: [String]) -> [String] {
     let ownName = ownRealExecutablePath.map { ($0 as NSString).lastPathComponent }
     var lines: [String] = []
@@ -140,8 +140,7 @@ func gitStatus(owners: [String]) -> [String] {
                 + "fix: gh-touchid git-setup \(owner)"
         )
     }
-    lines.append(gitHubCLIStatus())
-    return lines
+    return lines + gitHubCLIStatus()
 }
 
 /// The owner as a `credential.https://github.com/<owner>.helper` setting writes it, such as `Acme` for the stored
@@ -157,27 +156,124 @@ private func configuredOwner(_ owner: String) -> String {
     return owner
 }
 
-/// Whether the first `gh` on PATH is the one beside this gh-touchid's executable, which runs gh through it.
-private func gitHubCLIStatus() -> String {
-    let first = commandsOnPath("gh").first
-    let shown = first ?? "none"
-    guard let own = ownRealExecutablePath else {
-        return "gh on PATH: \(shown)"
+/// Which `gh` is first on PATH: this gh-touchid's wrapper, another gh, or none, with the fix for this installation unless
+/// it is the wrapper; then, when a gh other than the wrapper is on PATH, whether gh is signed in to github.com.
+private func gitHubCLIStatus() -> [String] {
+    let found = commandsOnPath("gh")
+    let first = found.first
+    var lines: [String] = []
+    let wrapper = ownRealExecutablePath.flatMap { own in
+        realPath((gitHubCLIWrapperFolder(own: own, stable: false) as NSString).appendingPathComponent("gh"))
     }
-    let ours = ((own as NSString).deletingLastPathComponent as NSString).appendingPathComponent("gh")
-    guard let real = realPath(ours) else {
-        return "gh on PATH: \(shown); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`"
+    if let own = ownRealExecutablePath, let wrapper {
+        if let first, realPath(first) == wrapper {
+            lines.append("gh on PATH: \(first), this gh-touchid's wrapper")
+        } else {
+            let folder = gitHubCLIWrapperFolder(own: own, stable: true)
+            let onPath = commandsOnPath((own as NSString).lastPathComponent).first.flatMap(realPath) == own
+            let command = onPath ? (own as NSString).lastPathComponent : gitCredentialExecutable()?.path ?? own
+            let fix = "fix: add `export PATH=\"\(folder):$PATH\"` to your shell's profile, "
+                + "or `alias gh='\(command) gh'` for your own shell only"
+            lines.append(first.map { "gh on PATH: \($0), another gh; \(fix)" } ?? "gh on PATH: none; \(fix)")
+        }
+    } else {
+        lines.append("gh on PATH: \(first ?? "none"); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`")
     }
-    if let first, realPath(first) == real {
-        return "gh on PATH: \(first), gh-touchid's"
+    if found.contains(where: { realPath($0) != wrapper }), let login = gitHubCLISignIn() {
+        lines.append(
+            "another gh is signed in \(login.isEmpty ? "to github.com" : "as \(login)"): any program can use that "
+                + "login; `gh auth logout` to close it"
+        )
     }
-    let link = commandsOnPath("gh").first(where: { realPath($0) == real }) ?? ours
-    let folder = (link as NSString).deletingLastPathComponent
-    guard let first else {
-        return "gh on PATH: none; fix: put \(folder) on PATH for gh-touchid's gh"
+    return lines
+}
+
+/// The folder of this installation's gh wrapper, `libexec/bin` beside the real folder of the executable `own`. With
+/// `stable`, an executable in Homebrew's Cellar (`<prefix>/Cellar/<name>/<version>/bin/…`) gets the formula's `opt`
+/// link instead, `<prefix>/opt/<name>/libexec/bin`, which stays the same across updates, when it exists.
+private func gitHubCLIWrapperFolder(own: String, stable: Bool) -> String {
+    let components = (own as NSString).pathComponents
+    let root = NSString.path(withComponents: Array(components.dropLast(2)))
+    let installed = (root as NSString).appendingPathComponent("libexec/bin")
+    guard stable, components.count >= 6, components[components.count - 5] == "Cellar" else {
+        return installed
     }
-    return "gh on PATH: \(first), not gh-touchid's; fix: put \(folder) before "
-        + "\((first as NSString).deletingLastPathComponent) in PATH, or remove that gh"
+    let prefix = NSString.path(withComponents: Array(components.dropLast(5)))
+    let opt = (prefix as NSString).appendingPathComponent("opt/\(components[components.count - 4])/libexec/bin")
+    return realPath((opt as NSString).appendingPathComponent("gh")) != nil ? opt : installed
+}
+
+/// The login a gh is signed in to github.com as, "" when it cannot be told, or nil when no gh is. No gh is run and no
+/// secret is read: only whether gh's hosts.yml has an `oauth_token` for github.com, and whether the Keychain has an
+/// item of gh's service `gh:github.com` (its attributes only).
+private func gitHubCLISignIn() -> String? {
+    let environment = ProcessInfo.processInfo.environment
+    let folder: String
+    if let configured = environment["GH_CONFIG_DIR"], !configured.isEmpty {
+        folder = configured
+    } else if let xdg = environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+        folder = (xdg as NSString).appendingPathComponent("gh")
+    } else {
+        folder = (NSHomeDirectory() as NSString).appendingPathComponent(".config/gh")
+    }
+    let hosts = (try? String(contentsOfFile: (folder as NSString).appendingPathComponent("hosts.yml"), encoding: .utf8))
+        .map(gitHubCLIHostsEntry) ?? (user: nil, hasToken: false)
+    let keychain = gitHubCLIKeychainAccounts()
+    guard hosts.hasToken || !keychain.isEmpty else {
+        return nil
+    }
+    let login = hosts.user ?? keychain.first(where: { !$0.isEmpty })
+    return login.flatMap { validOwner($0) == nil ? nil : $0 } ?? ""
+}
+
+/// What gh's hosts.yml says of github.com: its active login (`user:`, else the first one under `users:`) and whether
+/// an `oauth_token` is written in the file. The token is never kept.
+private func gitHubCLIHostsEntry(_ text: String) -> (user: String?, hasToken: Bool) {
+    let quotes = CharacterSet(charactersIn: "\"' ")
+    var inHost = false
+    var hostIndent: Int?
+    var usersIndent: Int?
+    var listedIndent: Int?
+    var user: String?
+    var listed: String?
+    var hasToken = false
+    for raw in text.split(whereSeparator: \.isNewline) {
+        let content = raw.drop(while: { $0 == " " })
+        guard !content.isEmpty, !content.hasPrefix("#"), let colon = content.firstIndex(of: ":") else {
+            continue
+        }
+        let indent = raw.count - content.count
+        let key = content[..<colon].trimmingCharacters(in: quotes)
+        let value = content[content.index(after: colon)...].trimmingCharacters(in: quotes)
+        if indent == 0 {
+            inHost = key == "github.com"
+            (hostIndent, usersIndent, listedIndent) = (nil, nil, nil)
+            continue
+        }
+        guard inHost else {
+            continue
+        }
+        if key == "oauth_token", !value.isEmpty {
+            hasToken = true
+        }
+        let host = hostIndent ?? indent
+        hostIndent = host
+        if indent <= host {
+            usersIndent = key == "users" ? indent : nil
+            listedIndent = nil
+            if key == "user", !value.isEmpty {
+                user = value
+            }
+        } else if let usersIndent, indent > usersIndent {
+            if listedIndent == nil {
+                listedIndent = indent
+            }
+            if indent == listedIndent, listed == nil {
+                listed = key
+            }
+        }
+    }
+    return (user ?? listed, hasToken)
 }
 
 /// A URL of one of the owner's repositories, to ask Git which helpers it would run.

@@ -7,6 +7,7 @@ import Security
 //   and its slug as the item's comment (none for Apps stored by earlier versions)
 // - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`
 // Accounts are lowercase. Items of gh-touchid 0.2 (service `com.lubaretsi.gh-touchid`) are no longer read.
+// gh's own sign-in, service `gh:github.com`, is only looked up, to tell whether another gh is signed in.
 // Listing, existence checks and the App's slug read attributes only, never a secret.
 
 private let appService = "com.lubaretsi.gh-touchid.app"
@@ -75,6 +76,12 @@ func removeUserToken(login: String) throws -> Bool {
 /// Logins of your accounts with a stored token.
 func storedUserLogins() throws -> [String] {
     try storedAccounts(service: userService)
+}
+
+/// The accounts of gh's own items for github.com (service `gh:github.com`, account = login, empty for older gh), read
+/// from their attributes: any means a gh is signed in with its token in the Keychain.
+func gitHubCLIKeychainAccounts() -> [String] {
+    (try? storedAccounts(service: "gh:github.com")) ?? []
 }
 
 #if GH_TOUCHID_TESTING
