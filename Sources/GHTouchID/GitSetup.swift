@@ -113,6 +113,73 @@ private func askInTerminal(_ question: String) -> String? {
     }
 }
 
+/// What `status` says about Git and gh: for each owner the credential helpers Git asks for its repositories, then
+/// whether `gh` on PATH is this gh-touchid's, each with the fix unless it is this gh-touchid alone.
+func gitStatus(owners: [String]) -> [String] {
+    let ownName = ownRealExecutablePath.map { ($0 as NSString).lastPathComponent }
+    var lines: [String] = []
+    for stored in owners {
+        let owner = configuredOwner(stored)
+        guard let helpers = credentialHelpers(for: probeURL(owner: owner)) else {
+            lines.append("Git for \(owner): cannot ask git")
+            continue
+        }
+        if helpers.count == 1, runsThisGitCredential(helpers[0]) {
+            lines.append("Git for \(owner) asks: this gh-touchid only")
+            continue
+        }
+        let asked = helpers.map { helper -> String in
+            if runsThisGitCredential(helper) {
+                return "this gh-touchid"
+            }
+            let name = helperName(helper)
+            return name == "gh-touchid" || name == ownName ? "another \(name)" : name
+        }
+        lines.append(
+            "Git for \(owner) asks: \(asked.isEmpty ? "no credential helper" : asked.joined(separator: ", ")); "
+                + "fix: gh-touchid git-setup \(owner)"
+        )
+    }
+    lines.append(gitHubCLIStatus())
+    return lines
+}
+
+/// The owner as a `credential.https://github.com/<owner>.helper` setting writes it, such as `Acme` for the stored
+/// `acme`, since Git compares it case-sensitively; the stored owner when no setting names it.
+private func configuredOwner(_ owner: String) -> String {
+    let pattern = #"^credential\.https://github\.com/[^/]+\.helper$"#
+    for key in gitOutput(["config", "--name-only", "--get-regexp", pattern])?.split(separator: "\n") ?? [] {
+        let written = key.dropFirst("credential.https://github.com/".count).dropLast(".helper".count)
+        if written.lowercased() == owner {
+            return String(written)
+        }
+    }
+    return owner
+}
+
+/// Whether the first `gh` on PATH is the one beside this gh-touchid's executable, which runs gh through it.
+private func gitHubCLIStatus() -> String {
+    let first = commandsOnPath("gh").first
+    let shown = first ?? "none"
+    guard let own = ownRealExecutablePath else {
+        return "gh on PATH: \(shown)"
+    }
+    let ours = ((own as NSString).deletingLastPathComponent as NSString).appendingPathComponent("gh")
+    guard let real = realPath(ours) else {
+        return "gh on PATH: \(shown); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`"
+    }
+    if let first, realPath(first) == real {
+        return "gh on PATH: \(first), gh-touchid's"
+    }
+    let link = commandsOnPath("gh").first(where: { realPath($0) == real }) ?? ours
+    let folder = (link as NSString).deletingLastPathComponent
+    guard let first else {
+        return "gh on PATH: none; fix: put \(folder) on PATH for gh-touchid's gh"
+    }
+    return "gh on PATH: \(first), not gh-touchid's; fix: put \(folder) before "
+        + "\((first as NSString).deletingLastPathComponent) in PATH, or remove that gh"
+}
+
 /// A URL of one of the owner's repositories, to ask Git which helpers it would run.
 func probeURL(owner: String) -> String {
     "https://github.com/\(owner)/x"

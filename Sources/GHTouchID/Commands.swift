@@ -261,12 +261,14 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
     return 0
 }
 
-/// Stored Apps and accounts (names only, no secret is read), then sessions and elevations.
+/// Stored Apps and accounts (names only, no secret is read), whether Git and gh go through this gh-touchid, then
+/// sessions and elevations.
 private func showStatus() throws -> Int32 {
     let owners = try storedAppOwners()
     let logins = try storedUserLogins()
     print("Apps (owners): \(owners.isEmpty ? "none" : owners.joined(separator: ", "))")
     print("Accounts: \(logins.isEmpty ? "none" : logins.joined(separator: ", "))")
+    gitStatus(owners: owners).forEach { print($0) }
     let reply = agentRequest(["op": "status"])
     let sessions = (reply?["sessions"] as? [Any] ?? []).compactMap(SessionInfo.init)
     let elevations = reply?["elevations"] as? [[String: Any]] ?? []
