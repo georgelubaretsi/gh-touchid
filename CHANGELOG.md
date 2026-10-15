@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Homebrew formula failed to load ("Calling `depends_on :macos` with `depends_on macos:` is disabled"); it now
+  states only `depends_on macos: :tahoe`, which also limits it to macOS.
+
 ## [0.3.1] - 2026-10-16
 
 ### Changed
