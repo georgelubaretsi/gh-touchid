@@ -100,6 +100,8 @@ private func setApp(owner: String, _ arguments: [String]) throws -> Int32 {
     let app = try verifyAppKey(clientId: clientId, key: key)
     try storeAppCredentials(AppCredentials(clientId: clientId, privateKey: pem), owner: owner, slug: app.slug)
     fputs("Stored the key of the GitHub App \(app.name) for \(owner); GitHub accepted it.\n", stderr)
+    // Git compares a URL's owner case-sensitively: write it as GitHub does
+    try offerGitSetup(owner: app.owner.flatMap { $0.lowercased() == owner ? $0 : nil } ?? owner)
     return 0
 }
 

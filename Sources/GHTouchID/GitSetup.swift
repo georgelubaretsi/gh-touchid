@@ -72,6 +72,47 @@ func setUpGit(owner: String) throws {
     }
 }
 
+/// The end of `app create` and `app set`: in a terminal, asks whether to set up Git for the owner now and does;
+/// without one, prints the command.
+func offerGitSetup(owner: String) throws {
+    let command = "gh-touchid git-setup \(owner)"
+    guard isatty(STDERR_FILENO) != 0, let answer = askInTerminal("Set up Git for \(owner) now? [Y/n] ") else {
+        fputs("To have Git use gh-touchid for \(owner)'s repositories, run: \(command)\n", stderr)
+        return
+    }
+    guard ["", "y", "yes"].contains(answer.lowercased()) else {
+        fputs("Git was left as it is; to set it up later, run: \(command)\n", stderr)
+        return
+    }
+    try setUpGit(owner: owner)
+}
+
+/// Asks on the terminal itself (`app set` reads the key from stdin) and returns the answer without surrounding
+/// spaces; nil without a terminal or when its input ends.
+private func askInTerminal(_ question: String) -> String? {
+    let terminal = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
+    guard terminal >= 0 else {
+        return nil
+    }
+    defer { close(terminal) }
+    _ = question.withCString { write(terminal, $0, strlen($0)) }
+    var line: [UInt8] = []
+    var byte: UInt8 = 0
+    while true {
+        let count = read(terminal, &byte, 1)
+        if count < 0 && errno == EINTR {
+            continue
+        }
+        guard count == 1 else {
+            return nil
+        }
+        if byte == UInt8(ascii: "\n") {
+            return String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+        }
+        line.append(byte)
+    }
+}
+
 /// A URL of one of the owner's repositories, to ask Git which helpers it would run.
 func probeURL(owner: String) -> String {
     "https://github.com/\(owner)/x"
