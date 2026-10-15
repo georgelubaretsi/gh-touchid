@@ -8,15 +8,34 @@ class GhTouchid < Formula
   depends_on :macos
   depends_on macos: :tahoe
 
-  conflicts_with "gh", because: "gh-touchid installs its own `gh`, which runs gh through gh-touchid"
-
   def install
-    bin.install "bin/gh-touchid", "bin/gh"
-    # GitHub's gh, which gh-touchid finds next to its own executable and checks by SHA-256 before running it
-    libexec.install "libexec/gh-touchid"
+    bin.install "bin/gh-touchid"
+    # libexec/bin/gh, which runs gh through gh-touchid, outside bin so that it sits beside Homebrew's gh; and GitHub's
+    # gh in libexec/gh-touchid, which gh-touchid finds next to its own executable and checks before running it
+    libexec.install "libexec/bin", "libexec/gh-touchid"
+  end
+
+  def caveats
+    <<~EOS
+      gh-touchid installs beside Homebrew's gh; neither gh nor Git goes through it until you set them up.
+
+      Git goes through gh-touchid for an owner's repositories after:
+        gh-touchid git-setup <owner>
+
+      To run `gh` through gh-touchid, put its gh folder first in PATH, in your shell's profile (this path stays
+      the same across updates):
+        export PATH="#{opt_libexec}/bin:$PATH"
+      or alias gh='gh-touchid gh' (your own shell only), or run `gh-touchid gh ...`.
+
+      A Homebrew gh that is signed in stays usable by any program running as you: run `gh auth logout` with it
+      (or uninstall it) for the full benefit. `gh-touchid status` tells which gh is first on PATH.
+    EOS
   end
 
   test do
     system bin/"gh-touchid", "help"
+    # Running gh through the wrapper needs a token from gh-touchid (Touch ID and a stored App or account), even for
+    # `gh --version`, so the test checks only that the wrapper is installed where the caveats point.
+    assert_predicate opt_libexec/"bin/gh", :executable?
   end
 end
