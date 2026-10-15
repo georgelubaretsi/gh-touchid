@@ -104,8 +104,9 @@ enum ToolError: Error, CustomStringConvertible {
     `session` takes the outermost Git repository here and those nested up to two levels below it whose
     owner has an App, and `elevate` takes the current repository.
     `elevate` lets tokens for the repositories include workflows for a while (30m, 8h, 1h30m, at most 1d).
-    `status` lists stored Apps and accounts, whether Git (per owner) and `gh` on PATH go through this
-    gh-touchid, sessions and elevations; `lock` ends sessions and elevations.
+    `status` lists stored Apps and accounts, whether Git (per owner) goes through this gh-touchid, which `gh`
+    is first on PATH (with how to put this gh-touchid's first) and whether another gh is signed in, sessions
+    and elevations; `lock` ends sessions and elevations.
     `version` prints gh-touchid's version.
     Every use is logged to ~/Library/Logs/gh-touchid/access.log.
     """

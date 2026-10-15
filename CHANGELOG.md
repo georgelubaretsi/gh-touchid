@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-16
+
+### Changed
+
+- Running `gh` through gh-touchid is opt-in. The release puts only `gh-touchid` in `bin/`; the `gh` wrapper moves to
+  `libexec/bin/gh`, which runs the installation's own `gh-touchid` wherever it is linked from. Put that folder first
+  in PATH (Homebrew: `/opt/homebrew/opt/gh-touchid/libexec/bin`, the same across updates), use
+  `alias gh='gh-touchid gh'`, or run `gh-touchid gh …`. After upgrading from 0.3.0, `gh` no longer goes through
+  gh-touchid until you choose one; Git, set up with `git-setup`, is unaffected.
+- The Homebrew formula installs `gh-touchid` and `libexec`, and its caveats say how to route `gh` and that a
+  signed-in Homebrew `gh` stays usable by any program running as you.
+- The flake's `default` and `from-source` packages install `bin/gh-touchid` and the wrapper in `libexec/bin`, no
+  `bin/gh`; the new `with-gh` package adds `bin/gh`, a link to the wrapper, to replace `gh` in a profile.
+- `gh-touchid status` says whether the first `gh` on PATH is this gh-touchid's wrapper, another `gh` (named), or
+  none, and otherwise prints the PATH line for this installation (Homebrew's `opt` folder for a Cellar install) and
+  the alias. When a `gh` other than the wrapper is on PATH and a `gh` is signed in to github.com, it says so and
+  suggests `gh auth logout`. It runs no other `gh` for this: it looks for an `oauth_token` in gh's `hosts.yml` and
+  for gh's `gh:github.com` Keychain item by its attributes only.
+
+### Fixed
+
+- gh-touchid installs beside Homebrew's `gh`: the formula no longer conflicts with it, so it no longer has to be
+  uninstalled first.
+- `status` no longer suggests removing another `gh`, which never made `gh` gh-touchid's.
+
 ## [0.3.0] - 2026-10-15
 
 ### Added
