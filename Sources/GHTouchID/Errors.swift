@@ -73,6 +73,7 @@ enum ToolError: Error, CustomStringConvertible {
       gh-touchid elevate --for <duration> [--repo <owner/name>]...
       gh-touchid status
       gh-touchid lock
+      gh-touchid version
 
     `app create` makes a GitHub App for an owner from a manifest in your browser (--no-open prints the URL
     instead) and stores it; `app set` stores one made by hand (client ID, PKCS#1 private key on stdin). Both
@@ -91,6 +92,7 @@ enum ToolError: Error, CustomStringConvertible {
     owner has an App, and `elevate` takes the current repository.
     `elevate` lets tokens for the repositories include workflows for a while (30m, 8h, 1h30m, at most 1d).
     `status` lists stored Apps and accounts, sessions and elevations; `lock` ends sessions and elevations.
+    `version` prints gh-touchid's version.
     Every use is logged to ~/Library/Logs/gh-touchid/access.log.
     """
 }

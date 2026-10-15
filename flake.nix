@@ -8,6 +8,15 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
+      # gh-touchid's version is the `toolVersion` constant in its sources, which `gh-touchid version` prints and the
+      # release workflow checks the tag against.
+      version =
+        let
+          lines = nixpkgs.lib.splitString "\n" (builtins.readFile ./Sources/GHTouchID/BuildConfiguration.swift);
+          found = builtins.filter (match: match != null) (map (builtins.match ''let toolVersion = "([^"]+)"'') lines);
+        in
+        builtins.head (builtins.head found);
+
       # gh-touchid built from these sources by scripts/build.sh with Xcode.
       fromSource =
         {
@@ -25,7 +34,7 @@
         }:
         stdenvNoCC.mkDerivation {
           pname = "gh-touchid";
-          version = "0.3.0";
+          inherit version;
           src = self;
 
           nativeBuildInputs = [ makeWrapper ];

@@ -17,6 +17,12 @@ func run() throws -> Int32 {
     case "help", "--help", "-h":
         print(ToolError.usageText)
         return 0
+    case "version", "--version":
+        guard rest.isEmpty else {
+            throw ToolError.usage
+        }
+        print(toolVersion)
+        return 0
     case "app":
         return try appCommand(rest)
     case "user":
