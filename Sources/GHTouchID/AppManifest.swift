@@ -90,6 +90,7 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
     if openBrowser {
         openInBrowser(install)
     }
+    try offerGitSetup(owner: app.owner)
     return 0
 }
 

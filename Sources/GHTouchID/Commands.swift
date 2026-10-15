@@ -17,12 +17,20 @@ func run() throws -> Int32 {
     case "help", "--help", "-h":
         print(ToolError.usageText)
         return 0
+    case "version", "--version":
+        guard rest.isEmpty else {
+            throw ToolError.usage
+        }
+        print(toolVersion)
+        return 0
     case "app":
         return try appCommand(rest)
     case "user":
         return try userCommand(rest)
     case "gh":
         return try runGitHub(rest, account: actingAccount())
+    case "git-setup":
+        return try gitSetup(rest)
     case "git-credential":
         return try gitCredential(rest)
     case "as":
@@ -92,6 +100,8 @@ private func setApp(owner: String, _ arguments: [String]) throws -> Int32 {
     let app = try verifyAppKey(clientId: clientId, key: key)
     try storeAppCredentials(AppCredentials(clientId: clientId, privateKey: pem), owner: owner, slug: app.slug)
     fputs("Stored the key of the GitHub App \(app.name) for \(owner); GitHub accepted it.\n", stderr)
+    // Git compares a URL's owner case-sensitively: write it as GitHub does
+    try offerGitSetup(owner: app.owner.flatMap { $0.lowercased() == owner ? $0 : nil } ?? owner)
     return 0
 }
 
@@ -251,12 +261,14 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
     return 0
 }
 
-/// Stored Apps and accounts (names only, no secret is read), then sessions and elevations.
+/// Stored Apps and accounts (names only, no secret is read), whether Git and gh go through this gh-touchid, then
+/// sessions and elevations.
 private func showStatus() throws -> Int32 {
     let owners = try storedAppOwners()
     let logins = try storedUserLogins()
     print("Apps (owners): \(owners.isEmpty ? "none" : owners.joined(separator: ", "))")
     print("Accounts: \(logins.isEmpty ? "none" : logins.joined(separator: ", "))")
+    gitStatus(owners: owners).forEach { print($0) }
     let reply = agentRequest(["op": "status"])
     let sessions = (reply?["sessions"] as? [Any] ?? []).compactMap(SessionInfo.init)
     let elevations = reply?["elevations"] as? [[String: Any]] ?? []

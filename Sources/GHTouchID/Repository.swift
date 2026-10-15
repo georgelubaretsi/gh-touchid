@@ -13,12 +13,23 @@ func repositoryIdentifier(in folder: String? = nil) throws -> String {
 
 /// What `git <arguments>` prints, trimmed, when it succeeds; nil otherwise.
 func gitOutput(_ arguments: [String]) -> String? {
+    guard let result = runGit(arguments), result.status == 0,
+          let text = String(data: result.output, encoding: .utf8) else {
+        return nil
+    }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+/// Runs `git <arguments>` and returns its exit status and standard output, or nil when Git cannot start. Git's
+/// standard error is dropped unless `showErrors`.
+func runGit(_ arguments: [String], showErrors: Bool = false) -> (status: Int32, output: Data)? {
     let process = Process()
     let output = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["git"] + arguments
     process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
+    process.standardError = showErrors ? FileHandle.standardError : FileHandle.nullDevice
     do {
         try process.run()
     } catch {
@@ -26,11 +37,7 @@ func gitOutput(_ arguments: [String]) -> String? {
     }
     let data = output.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
-    guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else {
-        return nil
-    }
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
+    return (process.terminationStatus, data)
 }
 
 /// `owner/name` from a github.com URL (`https://github.com/o/r.git`, `git@github.com:o/r`), or nil.

@@ -3,3 +3,4 @@
 .swiftpm/
 result
 .vscode/
+dist/

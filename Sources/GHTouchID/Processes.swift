@@ -11,6 +11,18 @@ func executablePath(_ pid: pid_t) -> String? {
 /// This program's own executable; daemon and clients trust each other only when theirs are the same.
 let ownExecutablePath: String? = executablePath(getpid())
 
+/// `path` with every symlink resolved, or nil when it does not exist.
+func realPath(_ path: String) -> String? {
+    guard let resolved = realpath(path, nil) else {
+        return nil
+    }
+    defer { free(resolved) }
+    return String(cString: resolved)
+}
+
+/// This program's own executable with symlinks resolved: where an installation keeps it, such as Homebrew's Cellar.
+let ownRealExecutablePath: String? = ownExecutablePath.flatMap(realPath)
+
 func processName(_ pid: pid_t) -> String {
     executablePath(pid).map { ($0 as NSString).lastPathComponent } ?? "?"
 }

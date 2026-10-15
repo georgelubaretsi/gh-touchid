@@ -8,13 +8,21 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      package =
+      # gh-touchid's version is the `toolVersion` constant in its sources, which `gh-touchid version` prints and the
+      # release workflow checks the tag against.
+      version =
+        let
+          lines = nixpkgs.lib.splitString "\n" (builtins.readFile ./Sources/GHTouchID/BuildConfiguration.swift);
+          found = builtins.filter (match: match != null) (map (builtins.match ''let toolVersion = "([^"]+)"'') lines);
+        in
+        builtins.head (builtins.head found);
+
+      # gh-touchid built from these sources by scripts/build.sh with Xcode.
+      fromSource =
         {
           lib,
           stdenvNoCC,
-          makeWrapper,
           gh,
-          git,
           # The Xcode that builds gh-touchid: proprietary, so never in the store; the build calls it where it is
           # installed and refuses any other version.
           xcode ? {
@@ -22,33 +30,10 @@
             path = "/Applications/Xcode.app";
           },
         }:
-        let
-          minimum = "26.0";
-          architecture = if stdenvNoCC.hostPlatform.isAarch64 then "arm64" else "x86_64";
-          # Xcode's own tools, with nothing of Nix's compiler setup in the way.
-          toolchain = ''
-            unset SDKROOT NIX_CFLAGS_COMPILE NIX_LDFLAGS MACOSX_DEPLOYMENT_TARGET CC CXX LD
-            export DEVELOPER_DIR=${lib.escapeShellArg "${xcode.path}/Contents/Developer"}
-            export HOME="$TMPDIR"
-            # First line only, without a pipe: `head` closing early is SIGPIPE under pipefail.
-            installed="$(/usr/bin/xcodebuild -version 2>&1)" || true
-            installed="''${installed%%$'\n'*}"
-            if [ "$installed" != ${lib.escapeShellArg "Xcode ${xcode.version}"} ]; then
-              echo "gh-touchid: needs Xcode ${xcode.version} at ${xcode.path}; found: $installed" >&2
-              exit 1
-            fi
-            # `-disable-sandbox`: swiftc otherwise runs macro plugins under its own sandbox-exec, which fails as a
-            # Nix build user.
-            swiftc=(/usr/bin/xcrun --sdk macosx swiftc -O -swift-version 5 -disable-sandbox
-              -target ${architecture}-apple-macos${minimum} -module-cache-path "$TMPDIR/modules")
-          '';
-        in
         stdenvNoCC.mkDerivation {
           pname = "gh-touchid";
-          version = "0.3.0";
+          inherit version;
           src = self;
-
-          nativeBuildInputs = [ makeWrapper ];
 
           # Xcode lives outside the store: the build reaches it, so it cannot run in a sandbox (`sandbox = false`
           # or `relaxed`).
@@ -59,56 +44,85 @@
 
           dontConfigure = true;
 
-          postPatch = ''
-            substituteInPlace Sources/GHTouchID/BuildConfiguration.swift \
-              --replace-fail '@gh@' '${gh}/bin/gh'
-          '';
-
           buildPhase = ''
             runHook preBuild
-            ${toolchain}
-            "''${swiftc[@]}" \
-              -module-name GHTouchID \
-              Sources/GHTouchID/*.swift \
-              -o gh-touchid \
-              -framework Foundation \
-              -framework AppKit \
-              -framework SwiftUI \
-              -framework LocalAuthentication \
-              -framework LocalAuthenticationEmbeddedUI \
-              -framework Security
+            export HOME="$TMPDIR"
+            bash scripts/build.sh \
+              --xcode ${lib.escapeShellArg xcode.path} \
+              --xcode-version ${lib.escapeShellArg xcode.version} \
+              --gh ${gh}/bin/gh \
+              --gh-sha256 "$(sha256sum ${gh}/bin/gh | cut -d ' ' -f 1)" \
+              --output gh-touchid
             runHook postBuild
           '';
 
+          # bin/gh-touchid is the executable itself, so that `git-setup` finds it on PATH; bin/gh runs gh through it.
           installPhase = ''
             runHook preInstall
-            install -Dm755 gh-touchid "$out/libexec/gh-touchid"
-            makeWrapper "$out/libexec/gh-touchid" "$out/bin/gh-touchid" \
-              --prefix PATH : "${lib.makeBinPath [ git ]}"
-            makeWrapper "$out/libexec/gh-touchid" "$out/bin/gh" \
-              --prefix PATH : "${lib.makeBinPath [ git ]}" \
-              --add-flags gh
+            install -Dm755 gh-touchid "$out/bin/gh-touchid"
+            printf '#!/bin/sh\nexec %s gh "$@"\n' "$out/bin/gh-touchid" > "$out/bin/gh"
+            chmod 755 "$out/bin/gh"
             runHook postInstall
           '';
 
-          meta = {
-            description = "Touch ID-gated GitHub credentials for macOS";
-            homepage = "https://github.com/GeorgeLubaretsi/gh-touchid";
-            license = lib.licenses.mit;
-            mainProgram = "gh-touchid";
-            platforms = lib.platforms.darwin;
-          };
+          meta = meta lib;
         };
+
+      # The release tarball pinned in release/nix.json, which the release workflow writes: unpacked as it is, with no
+      # build tools and nothing outside the store, so it builds with Nix's sandbox on.
+      fromRelease =
+        pin:
+        {
+          lib,
+          stdenvNoCC,
+          fetchurl,
+        }:
+        stdenvNoCC.mkDerivation {
+          pname = "gh-touchid";
+          inherit (pin) version;
+          src = fetchurl { inherit (pin) url sha256; };
+
+          dontConfigure = true;
+          dontBuild = true;
+
+          # The files as released: no fixup hook may strip or re-sign them, which would also change the bundled gh's
+          # SHA-256 that gh-touchid checks.
+          dontFixup = true;
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out"
+            cp -R bin libexec "$out/"
+            runHook postInstall
+          '';
+
+          meta = meta lib;
+        };
+
+      meta = lib: {
+        description = "Touch ID-gated GitHub credentials for macOS";
+        homepage = "https://github.com/GeorgeLubaretsi/gh-touchid";
+        license = lib.licenses.mit;
+        mainProgram = "gh-touchid";
+        platforms = lib.platforms.darwin;
+      };
+
+      pin = ./release/nix.json;
     in
     {
+      # `default` is the pinned release; before the first one, the build from source.
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          gh-touchid = pkgs.callPackage package { };
+          from-source = pkgs.callPackage fromSource { };
         in
-        {
-          default = gh-touchid;
-          inherit gh-touchid;
+        rec {
+          default =
+            if builtins.pathExists pin
+            then pkgs.callPackage (fromRelease (builtins.fromJSON (builtins.readFile pin))) { }
+            else from-source;
+          gh-touchid = default;
+          inherit from-source;
         });
 
       devShells = forAllSystems (system:
