@@ -5,7 +5,8 @@
 #
 #   gh-touchid-<version>-macos/
 #     bin/gh-touchid                  checks libexec/gh-touchid/gh's SHA-256, and its cdhash as gh starts
-#     bin/gh                          runs `gh-touchid gh "$@"`, with the gh-touchid next to it
+#     libexec/bin/gh                  runs `gh-touchid gh "$@"` with this installation's bin/gh-touchid; on PATH only
+#                                     for those who put libexec/bin there, so it sits beside any other gh
 #     libexec/gh-touchid/gh           GitHub's gh for macOS (universal, signed by GitHub)
 #     libexec/gh-touchid/gh-LICENSE   gh's license
 #     LICENSE
@@ -61,7 +62,7 @@ gh="$work/pkg/com.github.cli.pkg/Payload/usr/local/bin/gh"
 
 name="gh-touchid-$version-macos"
 stage="$work/$name"
-mkdir -p "$stage/bin" "$stage/libexec/gh-touchid"
+mkdir -p "$stage/bin" "$stage/libexec/bin" "$stage/libexec/gh-touchid"
 install -m 755 "$gh" "$stage/libexec/gh-touchid/gh"
 install -m 644 "$work/pkg/Resources/LICENSE" "$stage/libexec/gh-touchid/gh-LICENSE"
 bundled="$(/usr/bin/shasum -a 256 "$stage/libexec/gh-touchid/gh")"
@@ -77,13 +78,14 @@ done
   --gh ../libexec/gh-touchid/gh --gh-sha256 "${bundled%% *}" "${cdhash_arguments[@]}" \
   --output "$stage/bin/gh-touchid"
 chmod 755 "$stage/bin/gh-touchid"
-cat > "$stage/bin/gh" <<'EOF'
+cat > "$stage/libexec/bin/gh" <<'EOF'
 #!/bin/sh
-# gh through gh-touchid: runs the gh-touchid in this script's own folder, wherever a link to the script is.
+# gh through gh-touchid: runs the bin/gh-touchid of the installation this script is in (../../bin/gh-touchid from its
+# real folder), wherever a link to the script or to its folder is.
 self="$(/usr/bin/readlink -f "$0")" || exit 1
-exec "${self%/*}/gh-touchid" gh "$@"
+exec "${self%/libexec/bin/*}/bin/gh-touchid" gh "$@"
 EOF
-chmod 755 "$stage/bin/gh"
+chmod 755 "$stage/libexec/bin/gh"
 install -m 644 "$root/LICENSE" "$root/README.md" "$stage/"
 
 mkdir -p "$output"

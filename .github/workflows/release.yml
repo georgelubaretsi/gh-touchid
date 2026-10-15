@@ -50,11 +50,20 @@ jobs:
           set -euo pipefail
           tarball="$(echo dist/gh-touchid-*-macos.tar.gz)"
           name="$(basename "$tarball" .tar.gz)"
-          mkdir "$RUNNER_TEMP/unpacked" "$RUNNER_TEMP/bin"
+          mkdir "$RUNNER_TEMP/unpacked" "$RUNNER_TEMP/bin" "$RUNNER_TEMP/opt"
           tar -xzf "$tarball" -C "$RUNNER_TEMP/unpacked"
           root="$RUNNER_TEMP/unpacked/$name"
-          # Linked from another folder, as Homebrew links bin/ into its Cellar
-          ln -s "$root/bin/gh-touchid" "$root/bin/gh" "$RUNNER_TEMP/bin/"
+          # The layout: gh-touchid alone in bin/, the gh wrapper in libexec/bin/, so the tarball has no bin/gh to
+          # collide with another gh
+          bin="$(ls "$root/bin")"
+          if [ "$bin" != gh-touchid ]; then
+            echo "::error::bin/ holds $bin, not gh-touchid alone"
+            exit 1
+          fi
+          test -x "$root/libexec/bin/gh"
+          # Linked from other folders, as Homebrew links bin/ into its Cellar and opt/ to the installed version
+          ln -s "$root/bin/gh-touchid" "$RUNNER_TEMP/bin/"
+          ln -s "$root" "$RUNNER_TEMP/opt/gh-touchid"
           lipo -info "$root/bin/gh-touchid" "$root/libexec/gh-touchid/gh"
           "$RUNNER_TEMP/bin/gh-touchid" help
           version="$("$RUNNER_TEMP/bin/gh-touchid" version)"
@@ -63,6 +72,17 @@ jobs:
             echo "::error::gh-touchid version prints $version for the tag $GITHUB_REF_NAME"
             exit 1
           fi
+          # The wrapper, through the opt link, runs this gh-touchid: outside a repository, with no account to act as,
+          # gh-touchid stops before asking for any token
+          if output="$(cd "$RUNNER_TEMP" && "$RUNNER_TEMP/opt/gh-touchid/libexec/bin/gh" --version 2>&1)"; then
+            echo "::error::the gh wrapper ran gh without gh-touchid"
+            exit 1
+          fi
+          echo "$output"
+          case "$output" in
+            *"gh-touchid: current Git repository must have an origin on github.com"*) ;;
+            *) echo "::error::the gh wrapper did not run gh-touchid"; exit 1 ;;
+          esac
           echo "ROOT=$root" >> "$GITHUB_ENV"
 
       - name: Check the bundled gh's SHA-256 and cdhashes
@@ -82,11 +102,11 @@ jobs:
               fi
             done
           done
-          # A changed gh is refused, through a link, before anything else happens.
+          # A changed gh is refused, through the gh wrapper reached by a link, before anything else happens.
           cp -R "$ROOT" "$RUNNER_TEMP/changed"
           printf '\n' >> "$RUNNER_TEMP/changed/libexec/gh-touchid/gh"
-          ln -s "$RUNNER_TEMP/changed/bin/gh-touchid" "$RUNNER_TEMP/gh-touchid-changed"
-          if output="$("$RUNNER_TEMP/gh-touchid-changed" gh -R octocat/hello-world api user 2>&1)"; then
+          ln -s "$RUNNER_TEMP/changed/libexec/bin/gh" "$RUNNER_TEMP/gh-changed"
+          if output="$("$RUNNER_TEMP/gh-changed" -R octocat/hello-world api user 2>&1)"; then
             echo "::error::gh-touchid ran a changed gh"
             exit 1
           fi
