@@ -8,7 +8,8 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      package =
+      # gh-touchid built from these sources by scripts/build.sh with Xcode.
+      fromSource =
         {
           lib,
           stdenvNoCC,
@@ -22,27 +23,6 @@
             path = "/Applications/Xcode.app";
           },
         }:
-        let
-          minimum = "26.0";
-          architecture = if stdenvNoCC.hostPlatform.isAarch64 then "arm64" else "x86_64";
-          # Xcode's own tools, with nothing of Nix's compiler setup in the way.
-          toolchain = ''
-            unset SDKROOT NIX_CFLAGS_COMPILE NIX_LDFLAGS MACOSX_DEPLOYMENT_TARGET CC CXX LD
-            export DEVELOPER_DIR=${lib.escapeShellArg "${xcode.path}/Contents/Developer"}
-            export HOME="$TMPDIR"
-            # First line only, without a pipe: `head` closing early is SIGPIPE under pipefail.
-            installed="$(/usr/bin/xcodebuild -version 2>&1)" || true
-            installed="''${installed%%$'\n'*}"
-            if [ "$installed" != ${lib.escapeShellArg "Xcode ${xcode.version}"} ]; then
-              echo "gh-touchid: needs Xcode ${xcode.version} at ${xcode.path}; found: $installed" >&2
-              exit 1
-            fi
-            # `-disable-sandbox`: swiftc otherwise runs macro plugins under its own sandbox-exec, which fails as a
-            # Nix build user.
-            swiftc=(/usr/bin/xcrun --sdk macosx swiftc -O -swift-version 5 -disable-sandbox
-              -target ${architecture}-apple-macos${minimum} -module-cache-path "$TMPDIR/modules")
-          '';
-        in
         stdenvNoCC.mkDerivation {
           pname = "gh-touchid";
           version = "0.3.0";
@@ -59,24 +39,14 @@
 
           dontConfigure = true;
 
-          postPatch = ''
-            substituteInPlace Sources/GHTouchID/BuildConfiguration.swift \
-              --replace-fail '@gh@' '${gh}/bin/gh'
-          '';
-
           buildPhase = ''
             runHook preBuild
-            ${toolchain}
-            "''${swiftc[@]}" \
-              -module-name GHTouchID \
-              Sources/GHTouchID/*.swift \
-              -o gh-touchid \
-              -framework Foundation \
-              -framework AppKit \
-              -framework SwiftUI \
-              -framework LocalAuthentication \
-              -framework LocalAuthenticationEmbeddedUI \
-              -framework Security
+            export HOME="$TMPDIR"
+            bash scripts/build.sh \
+              --xcode ${lib.escapeShellArg xcode.path} \
+              --xcode-version ${lib.escapeShellArg xcode.version} \
+              --gh ${gh}/bin/gh \
+              --output gh-touchid
             runHook postBuild
           '';
 
@@ -104,11 +74,12 @@
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          gh-touchid = pkgs.callPackage package { };
+          from-source = pkgs.callPackage fromSource { };
         in
-        {
-          default = gh-touchid;
-          inherit gh-touchid;
+        rec {
+          default = from-source;
+          gh-touchid = default;
+          inherit from-source;
         });
 
       devShells = forAllSystems (system:
