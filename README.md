@@ -13,10 +13,90 @@ approved. Your own GitHub accounts are one Touch ID away with `gh-touchid as <lo
   until the process exits, and may open issues on your other repositories.
 - The raw token goes only to the `gh` that gh-touchid starts and to Git's network transport.
 
-## Setup
+## Install
 
-The Nix package provides `gh-touchid` and a transparent `gh` wrapper; see [Nix](#nix). gh-touchid works with the
-`gh` pinned in the package, whichever `gh` is on your PATH.
+gh-touchid runs on macOS 26 (Tahoe) or later, on Apple silicon and Intel Macs, and uses the `git` on your PATH. Every
+way to install it gives you the same release: `gh-touchid`, a `gh` that runs GitHub's CLI through gh-touchid, and
+GitHub's own `gh` for macOS, which gh-touchid keeps next to itself in `libexec/gh-touchid` and checks by its SHA-256
+each time before running it. A changed `gh` there is refused ("the gh next to gh-touchid was changed; reinstall
+gh-touchid").
+
+### Homebrew
+
+```sh
+brew install georgelubaretsi/tap/gh-touchid
+```
+
+The formula installs its own `gh`, so it conflicts with Homebrew's `gh` formula: `brew uninstall gh` first.
+gh-touchid never uses `gh`'s own login or configuration; it gives `gh` a fresh configuration and a token of its own.
+
+### Release tarball
+
+Download `gh-touchid-VERSION-macos.tar.gz` and its `.sha256` from the
+[releases](https://github.com/GeorgeLubaretsi/gh-touchid/releases), check it, and unpack it into a folder that stays
+put across updates:
+
+```sh
+shasum -a 256 -c gh-touchid-VERSION-macos.tar.gz.sha256
+xattr -d com.apple.quarantine gh-touchid-VERSION-macos.tar.gz   # only for a download from a browser
+mkdir -p ~/.local/gh-touchid
+tar -xzf gh-touchid-VERSION-macos.tar.gz -C ~/.local/gh-touchid --strip-components 1
+export PATH="$HOME/.local/gh-touchid/bin:$PATH"                 # in your shell's profile
+```
+
+A browser marks what it downloads as quarantined, and `tar` passes the mark on to the files it unpacks; macOS then
+refuses to run the unsigned gh-touchid. Removing the attribute from the tarball before unpacking avoids that (or run
+`xattr -dr com.apple.quarantine ~/.local/gh-touchid` afterwards). `curl` marks nothing. To update, unpack the new
+tarball over the old folder the same way.
+
+### Nix
+
+The flake's default package installs the release tarball: no Xcode, and it builds with Nix's sandbox on. Add it to a
+Darwin development shell:
+
+```nix
+{
+  inputs.gh-touchid.url = "github:GeorgeLubaretsi/gh-touchid";
+
+  outputs = { nixpkgs, gh-touchid, ... }:
+    let
+      system = "aarch64-darwin";
+      pkgs = import nixpkgs { inherit system; };
+    in {
+      devShells.${system}.default = pkgs.mkShell {
+        packages = [
+          gh-touchid.packages.${system}.default
+          pkgs.git
+        ];
+      };
+    };
+}
+```
+
+Example `.envrc`:
+
+```sh
+use flake
+```
+
+To install it in your profile instead: `nix profile install github:GeorgeLubaretsi/gh-touchid`. The release it
+installs is pinned in `release/nix.json`, which each release updates; until the first release, `default` builds from
+source like `packages.<system>.from-source` (see [Building from source](#building-from-source)).
+
+### Releases are unsigned, for now
+
+gh-touchid's releases are not signed with a Developer ID or notarized (GitHub's `gh` inside is signed by GitHub).
+What that costs:
+
+- The login Keychain remembers **Always Allow** for one exact executable, so after each update macOS asks for your
+  login Keychain password again the first time gh-touchid reads its items. Allow it only when the dialog names
+  `gh-touchid`.
+- Without the hardened runtime, another program running as you could load code into gh-touchid and use what
+  gh-touchid can reach. gh-touchid does not defend against code that already runs as you (see
+  [Security model](#security-model)).
+- macOS refuses to run a quarantined copy, as from a browser download: remove the attribute as shown above.
+
+## Setup
 
 ### 1. A GitHub App per owner
 
@@ -42,6 +122,9 @@ reach. `--no-open` prints the URLs instead, to open them in another browser prof
 
 gh-touchid leaves `workflows` out of every token unless you elevate the repository.
 
+At the end, in a terminal, it asks `Set up Git for OWNER now? [Y/n]` and sets Git up for the owner's repositories
+(step 3); without a terminal it prints the command instead.
+
 ### 2. Or store an App made by hand
 
 For an App you created yourself (in **Settings → Developer settings → GitHub Apps**, with the permissions above,
@@ -51,25 +134,41 @@ For an App you created yourself (in **Settings → Developer settings → GitHub
 gh-touchid app set OWNER --client-id Iv23li... < ~/Downloads/your-app.2026-10-14.private-key.pem
 ```
 
-After Touch ID, gh-touchid checks the key with GitHub and stores it like `app create`. Delete the downloaded `.pem`
-afterwards. The key must be the PKCS#1 PEM GitHub hands out (`-----BEGIN RSA PRIVATE KEY-----`).
+After Touch ID, gh-touchid checks the key with GitHub and stores it like `app create`, and asks the same question
+about Git. Delete the downloaded `.pem` afterwards. The key must be the PKCS#1 PEM GitHub hands out (`-----BEGIN RSA
+PRIVATE KEY-----`).
 
 ### 3. Git
 
-For each owner, let gh-touchid answer Git's HTTPS credential requests for that owner's repositories, in your global
-Git configuration:
+For each owner, let gh-touchid answer Git's HTTPS credential requests for that owner's repositories (`app create`
+and `app set` offer to do this for you):
 
 ```sh
-git config --global credential.https://github.com/OWNER.helper ''
-git config --global --add credential.https://github.com/OWNER.helper '!gh-touchid git-credential'
-git config --global credential.https://github.com/OWNER.useHttpPath true
+gh-touchid git-setup OWNER
+```
+
+writes these entries to your global Git configuration with `git config --global`, and prints them:
+
+```ini
+[credential "https://github.com/OWNER"]
+	helper =
+	helper = !/opt/homebrew/bin/gh-touchid git-credential
+	useHttpPath = true
 ```
 
 The empty first helper turns off any other helper (such as `osxkeychain`) for these repositories; `useHttpPath`
-tells gh-touchid which repository Git is talking to. Use HTTPS remotes (`https://github.com/OWNER/REPO.git`), and run
-Git where `gh-touchid` is on PATH. To push as one of your accounts to repositories of other owners (`gh-touchid as
-LOGIN git push`), configure the same three settings for `https://github.com` as a whole instead; Git reads public
-repositories without asking, and for other owners' private ones gh-touchid refuses unless you act as an account.
+tells gh-touchid which repository Git is talking to. The path is one that survives updates: the first `gh-touchid`
+on PATH that is this one, preferring a link such as `/opt/homebrew/bin/gh-touchid`,
+`/etc/profiles/per-user/$USER/bin/gh-touchid` or `~/.nix-profile/bin/gh-touchid` over a path in Homebrew's Cellar or
+the Nix store; if only such a versioned path exists, gh-touchid uses it and tells you to run `git-setup` again after
+each update. Running `git-setup` again replaces its own entries and moves them to the end of the file, after any
+broader `credential.helper` (as `gh auth setup-git` writes for all of github.com), whose helpers they turn off for
+OWNER. Write OWNER as it appears in your remotes' URLs (Git compares it case-sensitively), and use HTTPS remotes
+(`https://github.com/OWNER/REPO.git`). `gh-touchid status` says for each owner which helpers Git asks.
+
+To push as one of your accounts to repositories of other owners (`gh-touchid as LOGIN git push`), configure the same
+three settings for `https://github.com` as a whole instead; Git reads public repositories without asking, and for
+other owners' private ones gh-touchid refuses unless you act as an account.
 
 ### 4. Your accounts (optional)
 
@@ -181,10 +280,15 @@ gets a token without `workflows`.
 ## Status and lock
 
 ```sh
-gh-touchid status    # stored Apps and accounts (names only), sessions (pending or approved, program, folder,
+gh-touchid status    # stored Apps and accounts (names only), for each owner which credential helpers Git asks,
+                     # whether `gh` on PATH is gh-touchid's, sessions (pending or approved, program, folder,
                      # repositories) and elevations
 gh-touchid lock      # ends every session approval and elevation now
+gh-touchid version   # prints the version
 ```
+
+`status` suggests `gh-touchid git-setup OWNER` when Git asks anything but this gh-touchid for an owner's
+repositories, and which folder to put first in PATH when another `gh` comes first.
 
 Sessions and elevations live in a small background agent started by `session` or `elevate`. It holds no tokens or
 keys, answers only processes running as you on a socket in your private temporary directory (`getconf
@@ -204,49 +308,31 @@ along with sessions registered, approved and ended, and elevations.
   `security delete-generic-password -s com.lubaretsi.gh-touchid -a owner/repo`.
 - Create an App per owner with `app create` (or by hand and `app set`).
 - Replace the per-repository `credential.helper` settings of 0.2 (`git config --local --unset-all
-  credential.helper`) with the per-owner global ones above.
+  credential.helper`) with `gh-touchid git-setup OWNER`.
 
-## Nix
+## Building from source
 
-Add the package to a Darwin development shell:
-
-```nix
-{
-  inputs.gh-touchid.url = "github:GeorgeLubaretsi/gh-touchid";
-
-  outputs = { nixpkgs, gh-touchid, ... }:
-    let
-      system = "aarch64-darwin";
-      pkgs = import nixpkgs { inherit system; };
-    in {
-      devShells.${system}.default = pkgs.mkShell {
-        packages = [
-          gh-touchid.packages.${system}.default
-          pkgs.git
-        ];
-      };
-    };
-}
-```
-
-Example `.envrc`:
+gh-touchid is built with the Swift compiler of Xcode 26 or later. `scripts/build.sh` builds it, for arm64 and x86_64
+in one universal executable:
 
 ```sh
-use flake
+scripts/build.sh --output gh-touchid   # a development build, which runs GH_TOUCHID_GH or the gh on PATH
+scripts/package.sh                     # the release tarball in dist/, as the release workflow builds it
 ```
 
-The package pins `gh` at build time and ignores `GH_TOUCHID_GH`. A development build of the sources (`xcrun swiftc
-Sources/GHTouchID/*.swift`) runs `GH_TOUCHID_GH` or the `gh` on PATH.
+`--xcode` picks the Xcode (default `/Applications/Xcode.app`) and `--xcode-version` refuses any other version.
+`scripts/package.sh` downloads GitHub's `gh` for macOS from the release pinned in `release/gh.json`, refuses it unless
+its SHA-256 matches, and builds gh-touchid to run only that `gh`, checked by its SHA-256 (`scripts/build.sh --gh
+../libexec/gh-touchid/gh --gh-sha256 …`). Only development builds honour `GH_TOUCHID_GH`.
 
-### Building
-
-gh-touchid is built with the Swift compiler of Xcode 27.0, which Nix cannot provide: install Xcode 27.0 at
-`/Applications/Xcode.app` and build with Nix's sandbox off or relaxed (`sandbox = false` or `sandbox = relaxed` in
-`nix.conf`; the package sets `__noChroot`). The build stops, naming the Xcode it needs, when it finds another
-version. For an Xcode installed elsewhere, or another version at your own risk, override the package:
+The flake's `packages.<system>.from-source` builds through the same script with Xcode 27.0, which Nix cannot provide,
+and pins nixpkgs' `gh` by its store path and SHA-256: install Xcode 27.0 at `/Applications/Xcode.app` and build with
+Nix's sandbox off or relaxed (`sandbox = false` or `sandbox = relaxed` in `nix.conf`; the package sets
+`__noChroot`). The build stops, naming the Xcode it needs, when it finds another version. For an Xcode installed
+elsewhere, or another version at your own risk, override the package:
 
 ```nix
-gh-touchid.packages.${system}.default.override {
+gh-touchid.packages.${system}.from-source.override {
   xcode = { version = "27.0"; path = "/Applications/Xcode-27.0.app"; };
 }
 ```
@@ -267,9 +353,9 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   types at the hidden prompt, and `app create`/`app set` from the user's own terminal. Never request or accept a
   token or key through chat, tool arguments, environment dumps or agent messages.
 - Use an OMP supervised PTY for commands waiting on Touch ID so normal conversation does not abort the process.
-- On first use, and sometimes after an upgrade, macOS may ask for the login Keychain password. Choose **Always Allow**
-  only when the dialog names `gh-touchid` and a `com.lubaretsi.gh-touchid` item; deny it if it names Terminal,
-  `security`, `gh` or another process. Never ask for, enter, or handle the user's Mac password.
+- On first use, and after each update (releases are unsigned), macOS may ask for the login Keychain password. Choose
+  **Always Allow** only when the dialog names `gh-touchid` and a `com.lubaretsi.gh-touchid` item; deny it if it names
+  Terminal, `security`, `gh` or another process. Never ask for, enter, or handle the user's Mac password.
 - If Touch ID is declined or not answered (dialogs close after five minutes), stop and report it. Do not inspect the
   Keychain, switch credentials, or fall back to other GitHub authentication.
 - Never invoke credential-revealing paths such as `gh auth token`, `git credential fill`, `gh-touchid
@@ -298,10 +384,14 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   that gh-touchid starts or to Git's transport.
 - The App keys and your accounts' tokens are generic passwords in your login Keychain, available only while this Mac
   is unlocked and never synced. `status`, the hint and the checks before a dialog read only which items exist and the
-  App's name (its slug, kept in the item's comment), never a secret. This build is not signed with the hardened
-  runtime, so the protection is enforced by gh-touchid itself: it asks for Touch ID or checks the session before using
-  them, but macOS lets a process read the items once you allow it in the Keychain dialog or with your account
-  password.
+  App's name (its slug, kept in the item's comment), never a secret. Releases are not signed and run without the
+  hardened runtime, so the protection is enforced by gh-touchid itself: it asks for Touch ID or checks the session
+  before using them, but macOS lets a process read the items once you allow it in the Keychain dialog or with your
+  account password.
+- gh-touchid runs only the `gh` it was built with: in a release, GitHub's `gh` next to it in `libexec/gh-touchid`; in
+  the Nix build from source, nixpkgs' `gh` in the store. It checks that `gh`'s SHA-256 before minting a token and
+  again right before `gh` starts with it, and refuses a changed one, since any program running as you can write to
+  Homebrew's folders. No environment variable changes which `gh` it runs.
 - Everything inside an approved session shares its access: any process the session's root starts, at any depth, gets
   tokens for the session's repositories without Touch ID until the root exits, and can open issues on (and read)
   every private repository your Apps are installed on. Approve sessions for programs you trust, with the
