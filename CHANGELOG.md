@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The release workflow lints and runs the formula check on every pull request and tag, before publishing, and
-  renders the published formula with the same `scripts/render-formula.sh`.
+- The release workflow builds the tarball with `just package` and lints and runs the formula check on every pull
+  request and tag, before publishing, and renders the published formula with the same `scripts/render-formula.sh`.
 
 ### Fixed
 

@@ -46,8 +46,11 @@ jobs:
             exit 1
           fi
 
+      # Nix provides the flake's dev shell: just, through which every step runs, and the linters.
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
       - name: Build and package
-        run: scripts/package.sh --output dist --xcode "$XCODE" --xcode-version "$XCODE_VERSION"
+        run: nix develop --command just package --output dist --xcode "$XCODE" --xcode-version "$XCODE_VERSION"
 
       - name: Run gh-touchid from the unpacked tarball
         run: |
@@ -119,9 +122,6 @@ jobs:
             *"the gh next to gh-touchid was changed"*) ;;
             *) echo "::error::gh-touchid did not refuse the changed gh as expected"; exit 1 ;;
           esac
-
-      # Nix provides just and the linters (the flake's dev shell) and runs the formula check (`just check-formula`).
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
       - name: Lint
         run: nix develop --command just lint
