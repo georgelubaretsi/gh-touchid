@@ -182,8 +182,9 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i $ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh/known_hosts -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519"
           git clone git@github.com:georgelubaretsi/homebrew-tap.git "$RUNNER_TEMP/tap"
           mkdir -p "$RUNNER_TEMP/tap/Formula"
-          sed -e "s/@VERSION@/$version/g" -e "s/@SHA256@/$sha256/g" source/release/gh-touchid.rb.in \
-            > "$RUNNER_TEMP/tap/Formula/gh-touchid.rb"
+          source/scripts/render-formula.sh \
+            "https://github.com/GeorgeLubaretsi/gh-touchid/releases/download/v$version/gh-touchid-$version-macos.tar.gz" \
+            "$sha256" > "$RUNNER_TEMP/tap/Formula/gh-touchid.rb"
           cd "$RUNNER_TEMP/tap"
           git add Formula/gh-touchid.rb
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
