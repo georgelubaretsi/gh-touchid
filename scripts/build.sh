@@ -117,4 +117,5 @@ for architecture in arm64 x86_64; do
     -framework LocalAuthenticationEmbeddedUI \
     -framework Security
 done
+mkdir -p "$(dirname "$output")"
 /usr/bin/xcrun lipo -create -output "$output" "$work/gh-touchid-arm64" "$work/gh-touchid-x86_64"

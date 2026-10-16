@@ -1,5 +1,6 @@
-# Builds the release tarball on pull requests that touch what goes into it, and on version tags; a tag also publishes
-# it: the GitHub release, the formula in georgelubaretsi/homebrew-tap and the Nix pin in release/nix.json on main.
+# Builds the release tarball and checks it and its Homebrew formula on pull requests that touch what goes into them,
+# and on version tags; a tag also publishes it: the GitHub release, the formula in georgelubaretsi/homebrew-tap and
+# the Nix pin in release/nix.json on main.
 name: Release
 
 on:
@@ -9,6 +10,9 @@ on:
       - scripts/**
       - release/**
       - Package.swift
+      - flake.nix
+      - flake.lock
+      - justfile
       - .github/workflows/release.yml
   push:
     tags:
@@ -115,6 +119,17 @@ jobs:
             *"the gh next to gh-touchid was changed"*) ;;
             *) echo "::error::gh-touchid did not refuse the changed gh as expected"; exit 1 ;;
           esac
+
+      # Nix provides just and the linters (the flake's dev shell) and runs the formula check (`just check-formula`).
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Lint
+        run: nix develop --command just lint
+
+      # The formula, rendered for this tarball, installed and tested with a throwaway copy of the newest Homebrew,
+      # before anything is published.
+      - name: Check the Homebrew formula
+        run: nix develop --command just check-formula dist
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
