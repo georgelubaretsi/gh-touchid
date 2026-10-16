@@ -146,13 +146,40 @@
           };
         });
 
+      # `nix run .#check-formula [-- TARBALL]`: the Homebrew formula checked with a throwaway copy of the newest
+      # Homebrew (scripts/check-formula.sh), with the tools it needs pinned here.
+      apps = forAllSystems (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          check-formula = pkgs.writeShellApplication {
+            name = "check-formula";
+            runtimeInputs = [
+              pkgs.coreutils
+              pkgs.git
+              pkgs.gnused
+            ];
+            text = ''exec ${self}/scripts/check-formula.sh "$@"'';
+          };
+        in
+        {
+          check-formula = {
+            type = "app";
+            program = "${check-formula}/bin/check-formula";
+            meta.description = "Check the Homebrew formula with a throwaway copy of the newest Homebrew";
+          };
+        });
+
+      # Everything the justfile's recipes call, besides Xcode.
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
             packages = [
               self.packages.${system}.default
+              pkgs.actionlint
               pkgs.git
+              pkgs.just
+              pkgs.shellcheck
             ];
           };
         });

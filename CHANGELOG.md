@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A justfile: `just build`, `just package`, `just check-formula` and `just lint`, inside the dev shell, which now
+  has `just`, actionlint and ShellCheck.
+- `just check-formula` (`nix run .#check-formula`) installs and tests the Homebrew formula for a tarball with a
+  throwaway copy of Homebrew's newest release, after `brew style` and `brew audit --strict`; it never touches the
+  Homebrew you use.
+
+### Changed
+
+- The release workflow lints and runs the formula check on every pull request and tag, before publishing, and
+  renders the published formula with the same `scripts/render-formula.sh`.
+
 ### Fixed
 
 - The Homebrew formula failed to load ("Calling `depends_on :macos` with `depends_on macos:` is disabled"); it now

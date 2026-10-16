@@ -359,13 +359,22 @@ behind, still running `gh` through gh-touchid; delete it to use the PATH entry i
 
 ## Building from source
 
-gh-touchid is built with the Swift compiler of Xcode 26 or later. `scripts/build.sh` builds it, for arm64 and x86_64
-in one universal executable:
+gh-touchid is built with the Swift compiler of Xcode 26 or later, for arm64 and x86_64 in one universal executable.
+Every task goes through the justfile, inside the dev shell (`nix develop`, or direnv), which has `just` and the
+linters:
 
 ```sh
-scripts/build.sh --output gh-touchid   # a development build, which runs GH_TOUCHID_GH or the gh on PATH
-scripts/package.sh                     # the release tarball in dist/, as the release workflow builds it
+just build           # a development build in build/, which runs GH_TOUCHID_GH or the gh on PATH (scripts/build.sh)
+just package         # the release tarball in dist/, as the release workflow builds it (scripts/package.sh)
+just check-formula   # the Homebrew formula for dist/'s tarball, checked with a throwaway copy of the newest Homebrew
+just lint            # the workflows with actionlint, the scripts with ShellCheck
 ```
+
+`just check-formula` (`nix run .#check-formula`) renders the formula for the tarball, then runs `brew style`,
+`brew audit --strict`, `brew install`, `brew test` and `brew linkage` with a copy of Homebrew's newest release made
+for the check in `~/Library/Caches/gh-touchid/check-formula` and deleted after it, so it needs no sudo and never
+touches the Homebrew you use. The release workflow runs the same checks on every pull request and tag, before
+anything is published, and the tap runs `brew test-bot` on changes made there.
 
 `--xcode` picks the Xcode (default `/Applications/Xcode.app`) and `--xcode-version` refuses any other version.
 `scripts/package.sh` downloads GitHub's `gh` for macOS from the release pinned in `release/gh.json`, refuses it unless

@@ -1,7 +1,7 @@
 class GhTouchid < Formula
   desc "Touch ID-gated GitHub credentials for gh and Git"
   homepage "https://github.com/GeorgeLubaretsi/gh-touchid"
-  url "https://github.com/GeorgeLubaretsi/gh-touchid/releases/download/v@VERSION@/gh-touchid-@VERSION@-macos.tar.gz"
+  url "@URL@"
   sha256 "@SHA256@"
   license "MIT"
 
