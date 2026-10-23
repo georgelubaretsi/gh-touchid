@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Checks the Homebrew formula the way users get it, with the newest Homebrew: renders release/gh-touchid.rb.in for a
 # tarball, then runs brew style, audit --strict, install, test and linkage with a throwaway copy of Homebrew in
-# ~/Library/Caches/gh-touchid/check-formula, never the Homebrew you use. Run it through `just check-formula`.
+# ~/Library/Caches/gh-touchid/check-formula, never the Homebrew you use, and checks that Homebrew installed
+# gh-touchid and GitHub's gh byte for byte as the tarball has them, signatures included. Run it through
+# `just check-formula`.
 #
 #   scripts/check-formula.sh [TARBALL | FOLDER]
 #
@@ -64,4 +66,14 @@ for step in "style $formula" "audit --strict --formula $formula" "install $formu
   # shellcheck disable=SC2086 # each step is brew's arguments, split on purpose
   brew $step
 done
-echo "==> The formula installs and passes Homebrew's checks."
+
+# Homebrew rewrites and re-signs a Mach-O file whose links it relocates; gh-touchid's signature, and the SHA-256 and
+# cdhashes it pins for GitHub's gh, hold only if neither was touched.
+prefix="$(brew --prefix "$formula")"
+mkdir "$run/unpacked"
+/usr/bin/tar -xzf "$tarball" -C "$run/unpacked" --strip-components 1
+for file in bin/gh-touchid libexec/gh-touchid/gh; do
+  /usr/bin/cmp -s "$run/unpacked/$file" "$prefix/$file" || fail "Homebrew installed a changed $file"
+done
+/usr/bin/codesign --verify --strict --all-architectures "$prefix/bin/gh-touchid"
+echo "==> The formula installs, passes Homebrew's checks, and keeps gh-touchid and gh as released."

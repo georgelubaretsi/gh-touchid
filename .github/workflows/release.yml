@@ -1,6 +1,7 @@
 # Builds the release tarball and checks it and its Homebrew formula on pull requests that touch what goes into them,
-# and on version tags; a tag also publishes it: the GitHub release, the formula in georgelubaretsi/homebrew-tap and
-# the Nix pin in release/nix.json on main.
+# and on version tags; a tag also signs gh-touchid with the Developer ID and the hardened runtime, has Apple notarize
+# it, checks the signed tarball again, and publishes it: the GitHub release, the formula in
+# georgelubaretsi/homebrew-tap and the Nix pin in release/nix.json on main. Pull requests build ad hoc signed only.
 name: Release
 
 on:
@@ -56,76 +57,16 @@ jobs:
       - name: Build and package
         run: nix develop --command just package --output dist --xcode "$XCODE" --xcode-version "$XCODE_VERSION"
 
-      - name: Run gh-touchid from the unpacked tarball
+      # The tarball as installed: its layout, gh-touchid through links, the gh wrapper, the bundled gh's SHA-256 and
+      # cdhashes pinned in gh-touchid, and a changed gh refused.
+      - name: Check the tarball
         run: |
           set -euo pipefail
-          tarball="$(echo dist/gh-touchid-*-macos.tar.gz)"
-          name="$(basename "$tarball" .tar.gz)"
-          mkdir "$RUNNER_TEMP/unpacked" "$RUNNER_TEMP/bin" "$RUNNER_TEMP/opt"
-          tar -xzf "$tarball" -C "$RUNNER_TEMP/unpacked"
-          root="$RUNNER_TEMP/unpacked/$name"
-          # The layout: gh-touchid alone in bin/, the gh wrapper in libexec/bin/, so the tarball has no bin/gh to
-          # collide with another gh
-          bin="$(ls "$root/bin")"
-          if [ "$bin" != gh-touchid ]; then
-            echo "::error::bin/ holds $bin, not gh-touchid alone"
-            exit 1
+          version=
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
           fi
-          test -x "$root/libexec/bin/gh"
-          # Linked from other folders, as Homebrew links bin/ into its Cellar and opt/ to the installed version
-          ln -s "$root/bin/gh-touchid" "$RUNNER_TEMP/bin/"
-          ln -s "$root" "$RUNNER_TEMP/opt/gh-touchid"
-          lipo -info "$root/bin/gh-touchid" "$root/libexec/gh-touchid/gh"
-          "$RUNNER_TEMP/bin/gh-touchid" help
-          version="$("$RUNNER_TEMP/bin/gh-touchid" version)"
-          echo "gh-touchid version: $version"
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::gh-touchid version prints $version for the tag $GITHUB_REF_NAME"
-            exit 1
-          fi
-          # The wrapper, through the opt link, runs this gh-touchid: outside a repository, with no account to act as,
-          # gh-touchid stops before asking for any token
-          if output="$(cd "$RUNNER_TEMP" && "$RUNNER_TEMP/opt/gh-touchid/libexec/bin/gh" --version 2>&1)"; then
-            echo "::error::the gh wrapper ran gh without gh-touchid"
-            exit 1
-          fi
-          echo "$output"
-          case "$output" in
-            *"gh-touchid: current Git repository must have an origin on github.com"*) ;;
-            *) echo "::error::the gh wrapper did not run gh-touchid"; exit 1 ;;
-          esac
-          echo "ROOT=$root" >> "$GITHUB_ENV"
-
-      - name: Check the bundled gh's SHA-256 and cdhashes
-        run: |
-          set -euo pipefail
-          gh="$ROOT/libexec/gh-touchid/gh"
-          expected="$(shasum -a 256 "$gh" | cut -d ' ' -f 1)"
-          cdhashes="arm64=$(codesign -d -vvv --arch arm64 "$gh" 2>&1 | sed -n 's/^CDHash=//p')"
-          cdhashes="$cdhashes,x86_64=$(codesign -d -vvv --arch x86_64 "$gh" 2>&1 | sed -n 's/^CDHash=//p')"
-          echo "libexec/gh-touchid/gh: $expected $cdhashes"
-          for architecture in arm64 x86_64; do
-            lipo -thin "$architecture" "$ROOT/bin/gh-touchid" -output "$RUNNER_TEMP/gh-touchid-$architecture"
-            for pin in "$expected" "$cdhashes"; do
-              if ! grep -q -a -F "$pin" "$RUNNER_TEMP/gh-touchid-$architecture"; then
-                echo "::error::the $architecture gh-touchid does not pin $pin"
-                exit 1
-              fi
-            done
-          done
-          # A changed gh is refused, through the gh wrapper reached by a link, before anything else happens.
-          cp -R "$ROOT" "$RUNNER_TEMP/changed"
-          printf '\n' >> "$RUNNER_TEMP/changed/libexec/gh-touchid/gh"
-          ln -s "$RUNNER_TEMP/changed/libexec/bin/gh" "$RUNNER_TEMP/gh-changed"
-          if output="$("$RUNNER_TEMP/gh-changed" -R octocat/hello-world api user 2>&1)"; then
-            echo "::error::gh-touchid ran a changed gh"
-            exit 1
-          fi
-          echo "$output"
-          case "$output" in
-            *"the gh next to gh-touchid was changed"*) ;;
-            *) echo "::error::gh-touchid did not refuse the changed gh as expected"; exit 1 ;;
-          esac
+          scripts/check-tarball.sh dist/gh-touchid-*-macos.tar.gz ${version:+"$version"}
 
       - name: Lint
         run: nix develop --command just lint
@@ -141,9 +82,65 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # Tags only: gh-touchid signed with the Developer ID and the hardened runtime, notarized, and the tarball repacked
+  # around it (scripts/sign.sh); GitHub's gh inside stays as GitHub signed it. The certificate and the notary key are
+  # secrets of the release environment, which only v* tags reach, and only the signing step sees them.
+  sign:
+    name: Sign and notarize gh-touchid
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: macos-26
+    environment: release
+    permissions:
+      contents: read
+    env:
+      # notarytool from the Xcode the build used
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gh-touchid-macos
+          path: dist
+
+      - name: Sign and notarize
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: scripts/sign.sh dist/gh-touchid-*-macos.tar.gz --work "$RUNNER_TEMP/signing"
+
+      # sign.sh deletes them when it exits; this covers a step that was cancelled or killed.
+      - name: Delete the signing keychain and keys
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing/signing.keychain-db" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/signing"
+
+      - name: Check the signed tarball
+        run: scripts/check-tarball.sh dist/gh-touchid-*-macos.tar.gz "${GITHUB_REF_NAME#v}"
+
+      # Nix only now, after the keychain is gone: the dev shell for the formula check.
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      # Homebrew installs the signed tarball with gh-touchid and GitHub's gh unchanged.
+      - name: Check the Homebrew formula
+        run: nix develop --command just check-formula dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gh-touchid-macos-signed
+          path: dist/
+          if-no-files-found: error
+
   publish:
     name: Publish the release
-    needs: build
+    needs: sign
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     environment: release
@@ -157,7 +154,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: gh-touchid-macos
+          name: gh-touchid-macos-signed
           path: dist
 
       - name: Check the tarball against its SHA-256

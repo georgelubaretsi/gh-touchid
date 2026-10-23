@@ -88,8 +88,4 @@ EOF
 chmod 755 "$stage/libexec/bin/gh"
 install -m 644 "$root/LICENSE" "$root/README.md" "$stage/"
 
-mkdir -p "$output"
-COPYFILE_DISABLE=1 /usr/bin/tar --no-mac-metadata --no-xattrs --no-acls --no-fflags \
-  --uid 0 --gid 0 --uname root --gname wheel -czf "$output/$name.tar.gz" -C "$work" "$name"
-(cd "$output" && /usr/bin/shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
-echo "$output/$name.tar.gz"
+"$root/scripts/pack.sh" "$stage" "$output"

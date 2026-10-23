@@ -69,10 +69,10 @@ export PATH="$HOME/.local/gh-touchid/bin:$PATH"                 # in your shell'
 export PATH="$HOME/.local/gh-touchid/libexec/bin:$PATH"         # also, to run `gh` through gh-touchid
 ```
 
-A browser marks downloads as quarantined, and `tar` passes the mark on to the files it unpacks. macOS then refuses to
-run the unsigned gh-touchid. Removing the attribute before unpacking avoids that; so does
-`xattr -dr com.apple.quarantine ~/.local/gh-touchid` afterwards. `curl` marks nothing. To update, unpack the new
-tarball over the old folder the same way.
+A browser marks downloads as quarantined, and `tar` passes the mark on to the files it unpacks. Releases are
+notarized, so macOS checks a quarantined gh-touchid with Apple, online, the first time it runs. Removing the attribute
+before unpacking skips that check; so does `xattr -dr com.apple.quarantine ~/.local/gh-touchid` afterwards. `curl`
+marks nothing. To update, unpack the new tarball over the old folder the same way.
 
 ### Nix
 
@@ -134,16 +134,23 @@ gh-touchid never uses another `gh`'s login or configuration. But another `gh` th
 stays usable by any program running as you, whichever `gh` comes first on PATH. Run `gh auth logout` with it, or
 uninstall it. `gh-touchid status` says which `gh` comes first on PATH and whether another one is signed in.
 
-### Releases are unsigned, for now
+### Signed releases
 
-gh-touchid's releases are not signed with a Developer ID or notarized. (GitHub's `gh` inside is signed by GitHub.)
-What that costs:
+Releases, which Homebrew and the flake's default package install, are signed with a Developer ID, run with the
+hardened runtime, and are notarized by Apple. (GitHub's `gh` inside stays as GitHub signed it.) What that gives you:
 
-- The login Keychain remembers **Always Allow** for one exact executable. After each update, macOS asks for your login
-  Keychain password again the first time gh-touchid reads its items. Allow it only when the dialog names `gh-touchid`.
-- Without the hardened runtime, another program running as you could load code into gh-touchid and use what it can
-  reach. gh-touchid does not defend against code that already runs as you (see [Security model](#security-model)).
-- macOS refuses to run a quarantined copy, such as a browser download. Remove the attribute as shown above.
+- The login Keychain trusts gh-touchid by its signature (the identifier `com.lubaretsi.gh-touchid` and the Developer
+  ID team), so **Always Allow** lasts across updates. Items allowed for an unsigned release ask for your login
+  Keychain password once more, the first time a signed release reads them. Allow it only when the dialog names
+  `gh-touchid`.
+- The hardened runtime keeps other programs running as you from loading code into gh-touchid, such as a library
+  through `DYLD_INSERT_LIBRARIES`. gh-touchid still does not defend against code that already runs as you (see
+  [Security model](#security-model)).
+- macOS runs a quarantined copy, such as a browser download, after checking it with Apple (see above).
+
+Development builds and the flake's build from source (`from-source`) are only ad hoc signed, by the linker, and run
+without the hardened runtime. The Keychain remembers **Always Allow** for one exact executable, so each new build asks
+for your login Keychain password again, and another program running as you could load code into one.
 
 ## Setup
 
@@ -507,9 +514,10 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   terminal. Never request or accept a token, secret or key through chat, tool arguments, environment dumps or agent
   messages.
 - Use an OMP supervised PTY for commands waiting on Touch ID, so that normal conversation does not abort the process.
-- On first use, and after each update (releases are unsigned), macOS may ask for the login Keychain password. Choose
-  **Always Allow** only when the dialog names `gh-touchid` and a `com.lubaretsi.gh-touchid` item. Deny it if it names
-  Terminal, `security`, `gh` or another process. Never ask for, enter, or handle the user's Mac password.
+- On first use, macOS may ask for the login Keychain password: a signed release once more after the first signed
+  update, a development build after each new build. Choose **Always Allow** only when the dialog names `gh-touchid`
+  and a `com.lubaretsi.gh-touchid` item. Deny it if it names Terminal, `security`, `gh` or another process. Never ask
+  for, enter, or handle the user's Mac password.
 - If Touch ID is declined or not answered (dialogs close after five minutes), stop and report it. Do not inspect the
   Keychain, switch credentials, or fall back to other GitHub authentication.
 - Never invoke credential-revealing paths such as `gh auth token`, `git credential fill`,
@@ -575,9 +583,10 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
 - `status`, the hints and the checks before a dialog read only which items exist, the App's name (its slug) and the
   signed-in login. Those two are kept in the items' comments. They never read a secret. `status` also asks whether
   gh's own item `gh:github.com` exists, by its attributes alone.
-- Releases are unsigned and run without the hardened runtime, so gh-touchid itself enforces the protection: it asks
-  for Touch ID or checks the session before it uses the items. But macOS lets a process read them once you allow it
-  in the Keychain dialog or with your account password.
+- Releases run with the hardened runtime, so another program cannot load code into gh-touchid to use the items;
+  development builds and the build from source run without it. Either way gh-touchid itself enforces the protection:
+  it asks for Touch ID or checks the session before it uses the items. But macOS lets a process read them once you
+  allow it in the Keychain dialog or with your account password.
 
 ### Which `gh` runs
 
@@ -621,8 +630,9 @@ gh-touchid runs only the `gh` it was built with. No environment variable changes
 
 ### What gh-touchid does not defend against
 
-Code that already runs as you and sets out to tamper with gh-touchid. For example, it can load code into gh-touchid
-(an unsigned build without the hardened runtime allows that), or answer the Keychain dialogs.
+Code that already runs as you and sets out to tamper with gh-touchid. For example, it can load code into a development
+build or a build from source (ad hoc signed, without the hardened runtime; a release's hardened runtime blocks that),
+or answer the Keychain dialogs.
 
 ## Upgrading
 
@@ -700,11 +710,23 @@ build/gh-touchid app create acme --name acme-dev
 unless its SHA-256 matches. It builds gh-touchid to run only that `gh`, checked by its SHA-256 and by the cdhashes of
 its two slices (`scripts/build.sh` with `--gh ../libexec/gh-touchid/gh`, `--gh-sha256` and `--gh-cdhash`).
 
+On a `v*` tag, after the tarball passes its checks, the release workflow signs `bin/gh-touchid` with
+`scripts/sign.sh`, in a job of the GitHub environment `release`, which holds the certificate and the notary key and
+which only `v*` tags reach. It imports the Developer ID Application certificate into a temporary keychain, signs with
+the hardened runtime, a secure timestamp and the identifier `com.lubaretsi.gh-touchid` (no entitlements), and has
+Apple's notary service accept the result (`notarytool`). Then it repacks the tarball and its `.sha256` as
+`scripts/package.sh` lays them out (`scripts/pack.sh`), checks that every other file, GitHub's `gh` above all, is
+unchanged, and deletes the keychain and the keys. The signed tarball passes the tarball and formula checks again, and
+only it is published: its SHA-256 goes into the formula and the Nix pin. Pull-request builds never see the secrets and
+stay ad hoc signed. `scripts/sign.sh TARBALL --ad-hoc` signs with the ad hoc identity and the hardened runtime and
+skips notarization, to check the repack and the hardened runtime without the certificate.
+
 `just check-formula` (`nix run .#check-formula`) renders the formula for the tarball. Then it runs `brew style`,
-`brew audit --strict`, `brew install`, `brew test` and `brew linkage`, with a copy of Homebrew's newest release made
-for the check in `~/Library/Caches/gh-touchid/check-formula` and deleted after it. So it needs no sudo and never
-touches the Homebrew you use. The release workflow runs the same checks on every pull request and tag, before
-anything is published. The tap runs `brew test-bot` on changes made there.
+`brew audit --strict`, `brew install`, `brew test` and `brew linkage`, and checks that Homebrew installed gh-touchid
+and GitHub's `gh` byte for byte as the tarball has them, with a copy of Homebrew's newest release made for the check
+in `~/Library/Caches/gh-touchid/check-formula` and deleted after it. So it needs no sudo and never touches the
+Homebrew you use. The release workflow runs the same checks on every pull request and tag, before anything is
+published. The tap runs `brew test-bot` on changes made there.
 
 ### Tests
 

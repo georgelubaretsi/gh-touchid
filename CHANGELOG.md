@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gh api repos/OWNER/REPO/…` got a token for `GH_REPO` or the current folder's repository instead of the one its
   endpoint names, so from an umbrella folder it failed with 404.
 
+### Security
+
+- Releases are signed with a Developer ID, run with the hardened runtime, and are notarized: on a `v*` tag the
+  release workflow signs `bin/gh-touchid` (`scripts/sign.sh`, with the certificate and notary key of the `release`
+  environment), has Apple notarize it, repacks the tarball, checks it again and publishes only the signed one.
+  Other programs running as you can no longer load code into a release, the Keychain trusts gh-touchid by its
+  signature so **Always Allow** lasts across updates (items allowed for an unsigned release ask once more), and a
+  quarantined download runs after macOS checks it with Apple. GitHub's `gh` inside is unchanged. Development builds
+  and the flake's build from source stay ad hoc signed, without the hardened runtime.
+
 ## [0.3.1] - 2026-10-16
 
 ### Changed

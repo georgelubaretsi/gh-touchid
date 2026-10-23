@@ -89,9 +89,9 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 
 ## Out of scope
 
-- Code that already runs as the user and attacks gh-touchid itself: loading code into it (unsigned releases run
-  without the hardened runtime), reading Keychain items it was allowed, answering Keychain dialogs, ptrace, or
-  replacing gh-touchid's own executable.
+- Code that already runs as the user and attacks gh-touchid itself: loading code into it (a release's hardened
+  runtime blocks that; development builds and builds from source are ad hoc signed, without it, and allow it), reading
+  Keychain items it was allowed, answering Keychain dialogs, ptrace, or replacing gh-touchid's own executable.
 - Root, the kernel, and anyone with the Mac unlocked and the user's finger.
 - GitHub's own security, the browser's, and TLS interception by a trusted root certificate.
 - What an approved session does with the access it was given, within that access.
