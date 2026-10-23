@@ -34,7 +34,10 @@ against a mock GitHub, with no Touch ID and no Keychain.
 
 | Severity | Examples |
 | --- | --- |
-| Critical | a token, client secret or refresh token readable by another program, a log, a file or a web page; a token handed out without Touch ID or a covering session; any program other than the pinned gh getting a token |
+| Critical | a token, client secret or refresh token reaching a program, log, file or web page outside the documented paths (the pinned gh's `GH_TOKEN`, which the programs gh starts inherit while it runs, and Git's credential pipe to its HTTPS transport); a token handed out without Touch ID or a covering session; gh-touchid handing a token to any program but the pinned gh or Git's transport |
 | High | a token for more than one repository, or with `workflows` when not elevated; a `gh` token not revoked after gh exits; a session approved or elevated by a peer that is not this executable; a sign-in callback accepted without this attempt's `state` |
 | Medium | a dialog naming a different repository, command or identity than the token is for; a refused or failed flow leaving a secret stored, or saying it stored nothing when it did; a refusal that should come before a dialog coming after it |
 | Low | an access-log line missing or wrong; a misleading message that does not change what is granted |
+
+Behaviour that [docs/threat-model.md](docs/threat-model.md) lists under "Accepted risks" or "Out of scope" is not a
+vulnerability by itself; a change that widens it is.
