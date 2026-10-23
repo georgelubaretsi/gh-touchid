@@ -1,4 +1,4 @@
-// `git-credential <get|store|erase>`, Git's credential helper. A credential goes only to Git's HTTPS transport and
+// `git credential <get|store|erase>`, Git's credential helper. A credential goes only to Git's HTTPS transport and
 // never to a terminal; these tests cover the refusals, which come before any token is looked up or minted.
 
 import { describe, expect, test } from "bun:test";
@@ -14,12 +14,12 @@ function seedOwnerAndAccount(env: TestEnv): void {
   env.seedAccount("alice", "ghp_alice");
 }
 
-describe("git-credential get", () => {
+describe("git credential get", () => {
   test("refuses to write a credential to a terminal", async () => {
     await using env = await TestEnv.create();
     seedOwnerAndAccount(env);
     for (const extra of [{}, { GH_TOUCHID_AS: "alice" }]) {
-      const result = await env.run(["git-credential", "get"], { tty: true, env: extra });
+      const result = await env.run(["git", "credential", "get"], { tty: true, env: extra });
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("terminal");
       expect(result.stdout).not.toContain("password=");
@@ -32,7 +32,7 @@ describe("git-credential get", () => {
     await using env = await TestEnv.create();
     seedOwnerAndAccount(env);
     for (const extra of [{}, { GH_TOUCHID_AS: "alice" }]) {
-      const result = await env.run(["git-credential", "get"], { stdin: credentialRequest(env), env: extra });
+      const result = await env.run(["git", "credential", "get"], { stdin: credentialRequest(env), env: extra });
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("git-remote-https");
@@ -46,7 +46,7 @@ describe("git-credential get", () => {
     await using env = await TestEnv.create();
     seedOwnerAndAccount(env);
     const git = join(env.dir, "bin", "git");
-    const helper = `!'${binary}' git-credential`;
+    const helper = `!'${binary}' git credential`;
     const configured = await env.exec([git, "config", "--global", "credential.helper", helper]);
     expect(configured.status).toBe(0);
 
@@ -62,12 +62,12 @@ describe("git-credential get", () => {
   });
 });
 
-describe("git-credential store and erase", () => {
+describe("git credential store and erase", () => {
   for (const operation of ["store", "erase"]) {
     test(`${operation} reads its input and succeeds silently`, async () => {
       await using env = await TestEnv.create();
       seedOwnerAndAccount(env);
-      const result = await env.run(["git-credential", operation], {
+      const result = await env.run(["git", "credential", operation], {
         stdin: `${credentialRequest(env).trimEnd()}\nusername=x-access-token\npassword=ghs_old\n\n`,
       });
       expect(result).toMatchObject({ status: 0, stdout: "", stderr: "" });
@@ -78,7 +78,7 @@ describe("git-credential store and erase", () => {
 
   test("anything else is a usage error", async () => {
     await using env = await TestEnv.create();
-    for (const args of [["git-credential"], ["git-credential", "fill"], ["git-credential", "get", "extra"]]) {
+    for (const args of [["git", "credential"], ["git", "credential", "fill"], ["git", "credential", "get", "extra"]]) {
       const result = await env.run(args);
       expect(result.status).toBe(2);
       expect(result.stdout).toBe("");

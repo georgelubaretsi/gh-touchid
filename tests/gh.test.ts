@@ -63,6 +63,7 @@ describe("refusals before Touch ID", () => {
       expect(result.stderr).toContain("acme");
       expect(result.stderr).toContain("alice");
       expect(result.stderr).toContain("bob");
+      expect(result.stderr).toContain("gh-touchid as <login> -- gh");
     }
     expect(env.ghCalls()).toEqual([]);
     expect(env.mock.requests).toEqual([]);
@@ -74,7 +75,7 @@ describe("refusals before Touch ID", () => {
     const result = await env.run(["gh", "-R", "acme/widgets", "pr", "list"]);
     expect(result.status).toBe(1);
     expect(result.auth).toEqual([]);
-    expect(result.stderr).toContain("user add");
+    expect(result.stderr).toContain("account add");
     expect(env.ghCalls()).toEqual([]);
   });
 
@@ -162,7 +163,7 @@ describe("acting as an account", () => {
       const result = await env.run(args, { env: args[0] === "gh" ? { GH_TOUCHID_AS: "carol" } : {} });
       expect(result.status).toBe(1);
       expect(result.auth).toEqual([]);
-      expect(result.stderr).toContain("user add carol");
+      expect(result.stderr).toContain("account add carol");
     }
     expect(env.ghCalls()).toEqual([]);
   });
@@ -185,6 +186,47 @@ describe("acting as an account", () => {
     expect(result.auth).toEqual([]);
     expect(result.stdout.split("\n")).toContain("GH_TOUCHID_AS=alice");
     expect(result.stdout).not.toContain(aliceToken);
+  });
+
+  test("as <login> -- gh … acts exactly like as <login> gh …", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", aliceToken);
+    const plain = await env.run(["as", "alice", "gh", "api", "user"]);
+    const separated = await env.run(["as", "alice", "--", "gh", "api", "user"]);
+    for (const result of [plain, separated]) {
+      expect(result.status).toBe(0);
+      expect(result.auth).toHaveLength(1);
+    }
+    expect(separated.auth).toEqual(plain.auth);
+    const [first, second] = env.ghCalls().map(({ argv, ghToken, configDirEntries, githubToken }) => ({
+      argv,
+      ghToken,
+      configDirEntries,
+      githubToken,
+    }));
+    expect(first).toEqual({ argv: ["api", "user"], ghToken: aliceToken, configDirEntries: [], githubToken: null });
+    expect(second).toEqual(first!);
+    expect(env.accessLog().filter((line) => line.includes("granted no repository (as alice)"))).toHaveLength(2);
+  });
+
+  test("as <login> -- <command> runs the command, keeping a later --", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", aliceToken);
+    const result = await env.run(["as", "alice", "--", "/bin/sh", "-c", 'echo "$GH_TOUCHID_AS:$1"', "sh", "--"]);
+    expect(result.status).toBe(0);
+    expect(result.auth).toEqual([]);
+    expect(result.stdout).toBe("alice:--\n");
+  });
+
+  test("as <login> -- with no command is a usage error, before anything else", async () => {
+    await using env = await TestEnv.create();
+    for (const args of [["as", "alice", "--"], ["as", "alice"], ["as"], ["as", "not a login", "--"]]) {
+      const result = await env.run(args);
+      expect(result.status).toBe(2);
+      expect(result.auth).toEqual([]);
+      expect(result.stderr).toContain("gh-touchid as <login>");
+    }
+    expect(env.ghCalls()).toEqual([]);
   });
 });
 

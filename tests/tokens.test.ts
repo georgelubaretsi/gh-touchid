@@ -360,7 +360,7 @@ describe("Git", () => {
   async function configureGit(env: TestEnv): Promise<{ git: string; log: string }> {
     const git = join(env.dir, "bin", "git");
     const log = join(env.dir, "helper.log");
-    const helper = `!f() { '${binary}' git-credential "$@" | tee -a '${log}'; }; f`;
+    const helper = `!f() { '${binary}' git credential "$@" | tee -a '${log}'; }; f`;
     for (const args of [
       ["config", "--global", "credential.helper", ""],
       ["config", "--global", "--add", "credential.helper", helper],

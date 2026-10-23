@@ -45,7 +45,7 @@ describe("app create", () => {
       const manifest = JSON.parse(String(posted[0]!.fields?.manifest));
       expect(manifest.public).toBe(false);
       expect(manifest.redirect_url).toStartWith("http://127.0.0.1:");
-      expect(manifest.name).toBe("acme-agent");
+      expect(manifest.name).toBe("acme-touchid");
     });
   }
 
