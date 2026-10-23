@@ -418,7 +418,14 @@ anything is published, and the tap runs `brew test-bot` on changes made there.
 `scripts/package.sh` downloads GitHub's `gh` for macOS from the release pinned in `release/gh.json`, refuses it unless
 its SHA-256 matches, and builds gh-touchid to run only that `gh`, checked by its SHA-256 and by the cdhashes of its
 two slices (`scripts/build.sh` with `--gh ../libexec/gh-touchid/gh`, `--gh-sha256` and `--gh-cdhash`). Only
-development builds honour `GH_TOUCHID_GH`.
+development builds honour `GH_TOUCHID_GH`. A development build also keeps its own Keychain items
+(`com.lubaretsi.gh-touchid.dev.*`), so trying one never reads or replaces an installed gh-touchid's Apps, sign-ins and
+tokens: it needs an App of its own (`build/gh-touchid app create OWNER --name OWNER-dev`).
+
+`just test` builds a test build, which keeps its state in `GH_TOUCHID_TEST_DIR`, talks to a mock GitHub at
+`GH_TOUCHID_API_URL`, prints `AUTH:` and `OPEN:` lines instead of showing Touch ID or a browser, and runs a fake `gh`;
+then `bun test` runs the suite in `tests/` against it. The check workflow runs `just test` and `just lint` on every
+pull request and push to main, and the release workflow runs `just test` before packaging.
 
 The flake's `packages.<system>.from-source` builds through the same script with Xcode 27.0, which Nix cannot provide,
 and pins nixpkgs' `gh` by its store path and SHA-256: install Xcode 27.0 at `/Applications/Xcode.app` and build with

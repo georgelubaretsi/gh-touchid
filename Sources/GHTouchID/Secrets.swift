@@ -13,9 +13,18 @@ import Security
 // gh's own sign-in, service `gh:github.com`, is only looked up, to tell whether another gh is signed in.
 // Listing, existence checks, the App's slug and the signed-in login read attributes only, never a secret.
 
-private let appService = "com.lubaretsi.gh-touchid.app"
-private let signInService = "com.lubaretsi.gh-touchid.signin"
-private let userService = "com.lubaretsi.gh-touchid.user"
+/// A development build (one with no pinned gh, outside tests) keeps its items under `com.lubaretsi.gh-touchid.dev.*`,
+/// so that trying one never reads or replaces the Apps, sign-ins and tokens of an installed gh-touchid.
+private let servicePrefix: String = {
+#if GH_TOUCHID_TESTING
+    return "com.lubaretsi.gh-touchid"
+#else
+    return pinnedGitHubCLI.hasPrefix("@") ? "com.lubaretsi.gh-touchid.dev" : "com.lubaretsi.gh-touchid"
+#endif
+}()
+private let appService = "\(servicePrefix).app"
+private let signInService = "\(servicePrefix).signin"
+private let userService = "\(servicePrefix).user"
 
 /// The owner's GitHub App as gh-touchid uses it: the OAuth client you sign in to, which narrows your tokens.
 struct AppCredentials: Codable {

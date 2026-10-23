@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `app set <owner> --client-id <id>` takes the App's client secret (hidden input or stdin) instead of
   its private key, and signs you in; the App must list `http://127.0.0.1:47911/callback` as a callback URL.
 - Dialogs name who a use acts as: you, via the App.
+- Development builds (`just build`) keep their own Keychain items (`com.lubaretsi.gh-touchid.dev.*`), so trying one
+  never reads or replaces an installed gh-touchid's Apps, sign-ins and tokens.
 
 ### Removed
 
