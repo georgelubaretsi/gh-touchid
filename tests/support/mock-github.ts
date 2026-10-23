@@ -726,9 +726,12 @@ export class MockGitHub {
     const installations = this.installations.filter(
       (installation) => installation.app.clientId === token.clientId && this.canUse(installation, token.login),
     );
+    // GitHub's paging: per_page (default 30, at most 100) and page (from 1)
+    const perPage = Math.min(100, Math.max(1, Number(request.query.per_page ?? 30) || 30));
+    const page = Math.max(1, Number(request.query.page ?? 1) || 1);
     return json(200, {
       total_count: installations.length,
-      installations: installations.map((installation) => ({
+      installations: installations.slice((page - 1) * perPage, page * perPage).map((installation) => ({
         id: installation.id,
         account: accountJSON(installation.account),
         app_id: installation.app.id,

@@ -68,12 +68,12 @@ for step in "style $formula" "audit --strict --formula $formula" "install $formu
 done
 
 # Homebrew rewrites and re-signs a Mach-O file whose links it relocates; gh-touchid's signature, and the SHA-256 and
-# cdhashes it pins for GitHub's gh, hold only if neither was touched.
+# cdhashes it pins for GitHub's gh, hold only if neither was touched. Identical bytes keep the signature as it was
+# (a pull request's build is linker-signed, its x86_64 slice not at all; a release's is checked by scripts/sign.sh).
 prefix="$(brew --prefix "$formula")"
 mkdir "$run/unpacked"
 /usr/bin/tar -xzf "$tarball" -C "$run/unpacked" --strip-components 1
 for file in bin/gh-touchid libexec/gh-touchid/gh; do
   /usr/bin/cmp -s "$run/unpacked/$file" "$prefix/$file" || fail "Homebrew installed a changed $file"
 done
-/usr/bin/codesign --verify --strict --all-architectures "$prefix/bin/gh-touchid"
 echo "==> The formula installs, passes Homebrew's checks, and keeps gh-touchid and gh as released."

@@ -114,6 +114,22 @@ describe("refusals from GitHub", () => {
     expect(env.accessLog().some((line) => line.includes("refused acme/widgets"))).toBe(true);
   });
 
+  test("the owner's installation on a later page of /user/installations is found", async () => {
+    await using env = await TestEnv.create();
+    const { app, installation } = seedAcme(env);
+    // 150 other accounts that alice can see come first, so acme's installation is on page 2 of 100
+    for (let index = 0; index < 150; index++) {
+      env.mock.seedOrganization(`other-${index}`, ["alice"]);
+      env.mock.seedInstallation(app, `other-${index}`);
+    }
+    env.mock.installations.splice(env.mock.installations.indexOf(installation), 1);
+    env.mock.installations.push(installation);
+    const result = await env.run(["gh", "-R", "acme/widgets", "issue", "list"]);
+    expect(result.status).toBe(0);
+    expect(env.mock.requestsTo("GET", "/user/installations").map((request) => request.query.page)).toEqual(["1", "2"]);
+    expect(env.mock.scopedTokens().map((token) => token.repositories)).toEqual([["acme/widgets"]]);
+  });
+
   test("a repository outside the installation (HTTP 422) is refused, nothing is minted", async () => {
     await using env = await TestEnv.create();
     env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets", "secret"], installedOn: ["widgets"] });

@@ -91,24 +91,33 @@ func revokeScopedToken(_ token: String, app: AppCredentials) throws {
     }
 }
 
-/// The permissions of the owner's installation of the App, as your sign-in sees it (`GET /user/installations`).
+/// The permissions of the owner's installation of the App, as your sign-in sees it (`GET /user/installations`, page by
+/// page: an App installed on many accounts lists the owner's wherever GitHub puts it).
 private func installationPermissions(owner: String, token: String) throws -> [String: Any] {
-    let response = try githubAPI("GET", "/user/installations?per_page=100", bearer: token)
-    if response.status == 401 {
-        throw ToolError.notSignedIn(owner)
+    let pageSize = 100
+    var page = 1
+    while true {
+        let response = try githubAPI("GET", "/user/installations?per_page=\(pageSize)&page=\(page)", bearer: token)
+        if response.status == 401 {
+            throw ToolError.notSignedIn(owner)
+        }
+        guard response.status == 200, let installations = response.object?["installations"] as? [[String: Any]] else {
+            throw ToolError.github(
+                "cannot read where the \(owner) App is installed (HTTP \(response.status): \(response.message))"
+            )
+        }
+        let installation = installations.first {
+            (($0["account"] as? [String: Any])?["login"] as? String)?.lowercased() == owner
+        }
+        if let permissions = installation?["permissions"] as? [String: Any] {
+            return permissions
+        }
+        // a short page is the last; so is page 50, which is 5,000 installations
+        guard installations.count == pageSize, page < 50 else {
+            throw ToolError.github("the \(owner) App is not installed on \(owner)\(installHint(owner: owner))")
+        }
+        page += 1
     }
-    guard response.status == 200, let installations = response.object?["installations"] as? [[String: Any]] else {
-        throw ToolError.github(
-            "cannot read where the \(owner) App is installed (HTTP \(response.status): \(response.message))"
-        )
-    }
-    let installation = installations.first {
-        (($0["account"] as? [String: Any])?["login"] as? String)?.lowercased() == owner
-    }
-    guard let permissions = installation?["permissions"] as? [String: Any] else {
-        throw ToolError.github("the \(owner) App is not installed on \(owner)\(installHint(owner: owner))")
-    }
-    return permissions
 }
 
 /// `: install it at https://github.com/apps/<slug>/installations/new`, when the App's slug is stored.
