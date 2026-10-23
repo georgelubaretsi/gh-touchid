@@ -22,4 +22,4 @@ let releaseCodeRequirement = #"identifier "com.lubaretsi.gh-touchid" and anchor 
 
 /// gh-touchid's version, printed by `gh-touchid version`. The flake reads it for its package, and the release
 /// workflow checks the tag against it.
-let toolVersion = "0.4.1"
+let toolVersion = "0.4.2"
