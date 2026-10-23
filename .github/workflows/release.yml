@@ -49,6 +49,10 @@ jobs:
       # Nix provides the flake's dev shell: just, through which every step runs, and the linters.
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
+      # The black-box tests against a test build of the same sources, with the same Xcode (XCODE).
+      - name: Test
+        run: nix develop --command just test
+
       - name: Build and package
         run: nix develop --command just package --output dist --xcode "$XCODE" --xcode-version "$XCODE_VERSION"
 

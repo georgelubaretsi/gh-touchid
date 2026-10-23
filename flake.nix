@@ -169,7 +169,7 @@
           };
         });
 
-      # Everything the justfile's recipes call, besides Xcode.
+      # Everything the justfile's recipes call, besides Xcode: Bun runs the tests in tests/.
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
@@ -177,6 +177,7 @@
             packages = [
               self.packages.${system}.default
               pkgs.actionlint
+              pkgs.bun
               pkgs.git
               pkgs.just
               pkgs.shellcheck
