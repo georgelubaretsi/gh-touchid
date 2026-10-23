@@ -14,16 +14,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `just check-formula` (`nix run .#check-formula`) installs and tests the Homebrew formula for a tarball with a
   throwaway copy of Homebrew's newest release, after `brew style` and `brew audit --strict`; it never touches the
   Homebrew you use.
+- `gh-touchid app login <owner>` signs you in to the owner's App again, once the sign-in has ended.
+- `status` says for each owner's App who is signed in to it, or the `app login` to run.
+- A test suite (`just test`): a test build against a mock GitHub, run on every pull request and push to main, and
+  before each release.
+- `gh-touchid help <command>` and `gh-touchid <command> --help` print one command's usage; a wrong use of a
+  command prints that command's usage instead of every command's.
+- `as <login> -- <command>`: a `--` before the command is accepted, and optional.
+- SECURITY.md says how to report a vulnerability privately; docs/threat-model.md describes what gh-touchid protects,
+  from whom, and what is out of scope.
 
 ### Changed
 
 - The release workflow builds the tarball with `just package` and lints and runs the formula check on every pull
   request and tag, before publishing, and renders the published formula with the same `scripts/render-formula.sh`.
+- **Breaking:** `gh` and Git act as you, not as the App's bot. Each use gets a token narrowed from your sign-in to
+  the owner's App: still one repository and no `workflows` unless elevated, and revoked when `gh` exits, but your
+  account on GitHub, so Codex reviews agents' pull requests and answers their `@codex review`. A narrowed token lasts
+  as long as your sign-in's access token (one to eight hours), so tokens given to Git live longer than the hour they
+  used to. Apps stored by 0.3.1 and earlier are refused: run `gh-touchid app create <owner>` for each owner (see
+  "Upgrading from 0.3.1" in the README).
+- **Breaking:** `app create` also signs you in: after **Create GitHub App**, the browser goes on to the App's
+  **Authorize** page, then to its installation page; one Touch ID stores the App and your sign-in. It listens on the
+  fixed port 47911, which the App lists as its callback URL.
+- **Breaking:** `app set <owner> --client-id <id>` takes the App's client secret (hidden input or stdin) instead of
+  its private key, and signs you in; the App must list `http://127.0.0.1:47911/callback` as a callback URL.
+- Dialogs name who a use acts as: you, via the App.
+- Development builds (`just build`) keep their own Keychain items (`com.lubaretsi.gh-touchid.dev.*`), so trying one
+  never reads or replaces an installed gh-touchid's Apps, sign-ins and tokens.
+- **Breaking:** `user add` and `user remove` are now `account add` and `account remove`.
+- **Breaking:** `git-setup <owner>` is now `git setup <owner>`, and the credential helper `git-credential` is now
+  `git credential`. Run `gh-touchid git setup <owner>` again for each owner: it replaces the old helper entry, which
+  no longer works.
+- `app create` names a new App `<owner>-touchid` (was `<owner>-agent`), so it does not clash with an App made by
+  0.3.1 and earlier.
+
+### Removed
+
+- The App's private key: gh-touchid no longer stores or uses it, so nothing it holds can act as the App's bot.
 
 ### Fixed
 
 - The Homebrew formula failed to load ("Calling `depends_on :macos` with `depends_on macos:` is disabled"); it now
   states only `depends_on macos: :tahoe`, which also limits it to macOS.
+- `gh api repos/OWNER/REPO/…` got a token for `GH_REPO` or the current folder's repository instead of the one its
+  endpoint names, so from an umbrella folder it failed with 404.
+
+### Security
+
+- Releases are signed with a Developer ID, run with the hardened runtime, and are notarized: on a `v*` tag the
+  release workflow signs `bin/gh-touchid` (`scripts/sign.sh`, with the certificate and notary key of the `release`
+  environment), has Apple notarize it, repacks the tarball, checks it again and publishes only the signed one.
+  Other programs running as you can no longer load code into a release, the Keychain trusts gh-touchid by its
+  signature so **Always Allow** lasts across updates (items allowed for an unsigned release ask once more), and a
+  quarantined download runs after macOS checks it with Apple. GitHub's `gh` inside is unchanged. Development builds
+  and the flake's build from source stay ad hoc signed, without the hardened runtime.
 
 ## [0.3.1] - 2026-10-16
 

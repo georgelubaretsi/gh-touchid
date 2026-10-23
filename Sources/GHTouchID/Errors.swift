@@ -1,5 +1,7 @@
 enum ToolError: Error, CustomStringConvertible {
+    /// A wrong use: `commandUsage` when it is one command's.
     case usage
+    case commandUsage(String)
     case authentication(String)
     case authenticationNotAnswered
     case screenLocked
@@ -7,6 +9,8 @@ enum ToolError: Error, CustomStringConvertible {
     case missingRepository
     case missingAccount(String)
     case missingApp(String)
+    case legacyApp(owner: String, slug: String?)
+    case notSignedIn(String)
     case noApp(owner: String, logins: [String], program: String)
     case invalidToken
     case forbiddenCommand
@@ -23,7 +27,9 @@ enum ToolError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            return Self.usageText
+            return Usage.all
+        case let .commandUsage(command):
+            return Usage.of(command) ?? Usage.all
         case let .authentication(message):
             return "Touch ID failed: \(message)"
         case .authenticationNotAnswered:
@@ -35,15 +41,23 @@ enum ToolError: Error, CustomStringConvertible {
         case .missingRepository:
             return "current Git repository must have an origin on github.com"
         case let .missingAccount(login):
-            return "no token is stored for the account \(login); run `gh-touchid user add \(login)` first"
+            return "no token is stored for the account \(login); run `gh-touchid account add \(login)` first"
         case let .missingApp(owner):
             return "no GitHub App is stored for \(owner); run `gh-touchid app create \(owner)` first"
+        case let .legacyApp(owner, slug):
+            let old = slug.map { "the old App \($0) (delete it in its settings on GitHub, under Advanced)" }
+                ?? "the old App"
+            return "the App stored for \(owner) comes from gh-touchid 0.3 or earlier, which acted as the App's bot; "
+                + "run `gh-touchid app create \(owner)` to make one that acts as you, then remove \(old)"
+        case let .notSignedIn(owner):
+            return "you are not signed in to the GitHub App for \(owner), or the sign-in has ended; "
+                + "run `gh-touchid app login \(owner)`"
         case let .noApp(owner, logins, program):
             let accounts = logins.isEmpty
-                ? "none stored yet; add one with `gh-touchid user add <login>`"
+                ? "none stored yet; add one with `gh-touchid account add <login>`"
                 : "stored: \(logins.joined(separator: ", "))"
             return "no GitHub App is stored for \(owner); to act as one of your accounts: "
-                + "gh-touchid as <login> \(program) … (\(accounts))"
+                + "gh-touchid as <login> -- \(program) … (\(accounts))"
         case .invalidToken:
             return "the token must contain only printable ASCII and no whitespace"
         case .forbiddenCommand:
@@ -69,45 +83,4 @@ enum ToolError: Error, CustomStringConvertible {
             return message
         }
     }
-
-    static let usageText = """
-    Usage:
-      gh-touchid app create <owner> [--name <name>] [--no-open]
-      gh-touchid app set <owner> --client-id <id> < private-key.pem
-      gh-touchid user add <login>
-      gh-touchid user remove <login>
-      gh-touchid gh <arguments...>
-      gh-touchid git-setup <owner>
-      gh-touchid git-credential <get|store|erase>
-      gh-touchid as <login> <command> [arguments...]
-      gh-touchid session [--repo <owner/name>]...
-      gh-touchid elevate --for <duration> [--repo <owner/name>]...
-      gh-touchid status
-      gh-touchid lock
-      gh-touchid version
-
-    `app create` makes a GitHub App for an owner from a manifest in your browser (--no-open prints the URL
-    instead) and stores it; `app set` stores one made by hand (client ID, PKCS#1 private key on stdin). Both
-    ask for Touch ID and check the key with GitHub. `gh` and Git then act as the owner's App with a
-    short-lived token limited to one repository and without the workflows permission; for an owner without
-    an App they refuse before asking for Touch ID.
-    `user add` stores a token of one of your GitHub accounts (hidden input or stdin) once GitHub confirms
-    its login; `user remove` deletes it. `as` runs a command as that account, with Touch ID on every use:
-    `as <login> gh ...` directly, anything else with GH_TOUCHID_AS=<login>, which gh and Git honour.
-    `gh` runs GitHub CLI with a token; `git-credential` is Git's HTTPS credential helper, and `git-setup`
-    makes it the only one Git asks for the owner's repositories (in your global Git configuration; write
-    the owner as in your remotes' URLs).
-    Each use asks for Touch ID, except inside a session: `session` registers the program that ran it
-    (looking past shells that only run a command or a script); its first GitHub use asks once, then it and
-    everything it starts get tokens for its repositories without Touch ID until it exits, and issue-only
-    tokens for other repositories your Apps are installed on (public ones ask per use). Without --repo,
-    `session` takes the outermost Git repository here and those nested up to two levels below it whose
-    owner has an App, and `elevate` takes the current repository.
-    `elevate` lets tokens for the repositories include workflows for a while (30m, 8h, 1h30m, at most 1d).
-    `status` lists stored Apps and accounts, whether Git (per owner) goes through this gh-touchid, which `gh`
-    is first on PATH (with how to put this gh-touchid's first) and whether another gh is signed in, sessions
-    and elevations; `lock` ends sessions and elevations.
-    `version` prints gh-touchid's version.
-    Every use is logged to ~/Library/Logs/gh-touchid/access.log.
-    """
 }

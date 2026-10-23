@@ -56,7 +56,7 @@
             runHook postBuild
           '';
 
-          # bin/gh-touchid is the executable itself, so that `git-setup` finds it on PATH; libexec/bin/gh runs gh
+          # bin/gh-touchid is the executable itself, so that `git setup` finds it on PATH; libexec/bin/gh runs gh
           # through it, for those who put libexec/bin on PATH or take `with-gh`.
           installPhase = ''
             runHook preInstall
@@ -85,8 +85,10 @@
           dontConfigure = true;
           dontBuild = true;
 
-          # The files as released: no fixup hook may strip or re-sign them, which would also change the bundled gh's
-          # SHA-256 that gh-touchid checks.
+          # The files as released: no fixup hook may strip or re-sign them. Stripping would break gh-touchid's
+          # Developer ID signature and re-signing (the aarch64-darwin fixup signs ad hoc) would replace it, losing the
+          # hardened runtime and the Keychain's trust across updates; either would change the bundled gh's SHA-256
+          # that gh-touchid checks.
           dontFixup = true;
 
           # bin/gh-touchid and libexec/gh-touchid as released; libexec/bin/gh written as in the source build, so that it
@@ -169,7 +171,7 @@
           };
         });
 
-      # Everything the justfile's recipes call, besides Xcode.
+      # Everything the justfile's recipes call, besides Xcode: Bun runs the tests in tests/.
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
@@ -177,6 +179,7 @@
             packages = [
               self.packages.${system}.default
               pkgs.actionlint
+              pkgs.bun
               pkgs.git
               pkgs.just
               pkgs.shellcheck

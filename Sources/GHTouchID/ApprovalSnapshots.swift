@@ -13,44 +13,56 @@ func renderPrompts(into directory: String) throws -> Int32 {
     let hello = "octo-org/hello-world"
     let push = Use(command: "git push", branch: "fix-login")
     let prompts: [(String, Prompt)] = [
-        ("use-push", .appUse(by: agent, use: push, repository: widget, app: "acme-agent")),
-        ("use-push-no-slug", .appUse(by: agent, use: push, repository: widget, app: nil)),
+        ("use-push", .appUse(by: agent, use: push, repository: widget, app: "acme-agent", login: "octocat")),
+        ("use-push-no-slug", .appUse(by: agent, use: push, repository: widget, app: nil, login: nil)),
         ("use-push-delete", .appUse(
             by: agent,
             use: Use(command: "git push", branch: "delete old-login"),
             repository: widget,
-            app: "acme-agent"
+            app: "acme-agent",
+            login: "octocat"
         )),
-        ("use-read", .appUse(by: agent, use: Use(command: "git fetch"), repository: hello, app: "octo-agent")),
+        ("use-read", .appUse(
+            by: agent,
+            use: Use(command: "git fetch"),
+            repository: hello,
+            app: "octo-agent",
+            login: "octocat"
+        )),
         ("use-pull-request", .appUse(
             by: agent,
             use: ghUse(["pr", "create", "--title", "Fix the login form", "--body", "Closes #12."]),
             repository: widget,
-            app: "acme-agent"
+            app: "acme-agent",
+            login: "octocat"
         )),
         ("use-merge", .appUse(
             by: agent,
             use: ghUse(["pr", "merge", "12", "--squash", "--delete-branch"]),
             repository: "acme/gadget",
-            app: "acme-agent"
+            app: "acme-agent",
+            login: "octocat"
         )),
         ("use-long-names", .appUse(
             by: Requester(name: "agent-harness-runner", folder: NSHomeDirectory() + "/code/a-folder/with/a/long/path"),
             use: Use(command: "git push", branch: "a-branch-with-a-rather-long-name-for-a-small-fix"),
             repository: "an-organization-with-a-long-name/a-repository-with-an-even-longer-name",
-            app: "an-organization-with-a-long-name-agent"
+            app: "an-organization-with-a-long-name-agent",
+            login: "a-person-with-a-rather-long-login"
         )),
         ("use-issue", .appUse(
             by: agent,
             use: ghUse(["issue", "create", "-t", "Login fails on Safari", "-b", "Steps to reproduce: …"]),
             repository: widget,
-            app: "acme-agent"
+            app: "acme-agent",
+            login: "octocat"
         )),
         ("use-other", .appUse(
             by: agent,
             use: ghUse(["api", "repos/\(hello)/pulls/12/files", "--paginate"]),
             repository: hello,
-            app: "octo-agent"
+            app: "octo-agent",
+            login: "octocat"
         )),
         ("session-one", .session(program: "agent", repositories: [widget], folder: folder, started: started)),
         ("session-three", .session(
@@ -79,7 +91,8 @@ func renderPrompts(into directory: String) throws -> Int32 {
                     .joined(separator: "\n"),
             ]),
             repository: "acme/docs",
-            app: "acme-agent"
+            app: "acme-agent",
+            login: "octocat"
         )),
         ("public-issue", .publicIssue(
             by: agent,
@@ -88,13 +101,15 @@ func renderPrompts(into directory: String) throws -> Int32 {
                 "--body", "The install section says `brew instal`.\nIt should say `brew install`.\nThanks!\nmona",
             ]),
             repository: "acme/docs",
-            app: "acme-agent"
+            app: "acme-agent",
+            login: "octocat"
         )),
         ("public-comment", .publicIssue(
             by: agent,
             use: ghUse(["issue", "comment", "7", "--body-file", "notes.md"]),
             repository: "acme/docs",
-            app: nil
+            app: nil,
+            login: "octocat"
         )),
         ("elevate-one", .elevation(repositories: [widget], seconds: 30 * 60, by: agent)),
         ("elevate-two", .elevation(repositories: [widget, "acme/gadget"], seconds: 90 * 60, by: agent)),
@@ -105,9 +120,11 @@ func renderPrompts(into directory: String) throws -> Int32 {
             repository: "octo-org/octo-repo"
         )),
         ("account-no-repository", .acting(as: "mona", by: agent, use: ghUse(["api", "user"]), repository: nil)),
-        ("app-create", .newApp("acme-agent", owner: "acme")),
-        ("app-set", .appKey(owner: "acme")),
-        ("user-add", .accountToken("octocat")),
+        ("app-create", .newApp("acme-touchid", owner: "acme")),
+        ("app-create-sign-in", .signIn("octocat", owner: "acme", app: "acme-touchid", storesApp: true)),
+        ("app-set", .signIn("octocat", owner: "acme", app: nil, storesApp: true)),
+        ("app-login", .signIn("octocat", owner: "acme", app: "acme-touchid", storesApp: false)),
+        ("account-add", .accountToken("octocat")),
     ]
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     return try MainActor.assumeIsolated {

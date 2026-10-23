@@ -101,8 +101,8 @@ func normalizeToken(_ raw: String) throws -> String {
     return token
 }
 
-/// A token from hidden terminal input, or from stdin when it is not a terminal.
-func readToken() throws -> String {
+/// A token or secret from hidden terminal input, after `prompt`, or from stdin when it is not a terminal.
+func readToken(prompt: String = "GitHub token: ") throws -> String {
     if isatty(STDIN_FILENO) == 0 {
         return try normalizeToken(readStandardInputText())
     }
@@ -123,7 +123,7 @@ func readToken() throws -> String {
         fputs("\n", stderr)
     }
 
-    fputs("GitHub token: ", stderr)
+    fputs(prompt, stderr)
     fflush(stderr)
     guard let token = readLine(strippingNewline: true) else {
         throw ToolError.input("no token was provided")

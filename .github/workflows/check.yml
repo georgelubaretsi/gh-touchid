@@ -1,0 +1,33 @@
+# Runs the black-box tests (tests/, against a test build) and the linters on every pull request and every push to main.
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tests and lint
+    # The macOS 26 (arm64) image comes with Xcode 26.0.1 to 26.6 side by side; the test build takes 26.6 by its path,
+    # as the release workflow does (actions/runner-images: images/macos/macos-26-arm64-Readme.md).
+    runs-on: macos-26
+    env:
+      XCODE: /Applications/Xcode_26.6.app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Nix provides the flake's dev shell: just, Bun and the linters.
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Test
+        run: nix develop --command just test
+
+      - name: Lint
+        run: nix develop --command just lint

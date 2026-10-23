@@ -4,21 +4,24 @@ import Foundation
 // Who gets a token for repository R, decided by the client that needs it:
 // 1. Acting as one of your accounts (`as <login>`, GH_TOUCHID_AS=<login>): Touch ID for every use, sessions or not,
 //    then that account's token.
-// 2. R's owner has no App stored: refused before any dialog.
-// 3. Inside an approved session that lists R: a token from the App without Touch ID.
-// 4. Inside an approved session that does not list R: an issue-only token from the App; for a public R, Touch ID for
-//    this use first, and nothing for Git.
+// 2. R's owner has no App stored, or you are not signed in to it: refused before any dialog.
+// 3. Inside an approved session that lists R: a token for R, acting as you through the App, without Touch ID.
+// 4. Inside an approved session that does not list R: an issue-only token; for a public R, Touch ID for this use
+//    first, and nothing for Git.
 // 5. Inside a pending session: one Touch ID approves the session, then as 3 or 4.
-// 6. Anything else: Touch ID naming the command and who asked, then one token from the App.
-// App tokens include `workflows` only if R is elevated when the token is minted, which is after any dialog;
-// issue-only tokens never do. Every outcome is logged with the process chain.
+// 6. Anything else: Touch ID naming the command and who asked, then one token for R.
+// Tokens of 3–6 come from your sign-in to R's owner's App, narrowed to R; they include `workflows` only if R is
+// elevated when the token is made, which is after any dialog; issue-only tokens never do. Every outcome is logged
+// with the process chain.
 
 struct GitHubCredential {
     let token: String
     /// What Git sends as the username with it.
     let username: String
-    /// When an App token expires; nil for an account's token, which is neither revoked nor expires here.
+    /// When a narrowed token expires; nil for an account's token, which is neither revoked nor expires here.
     let expires: Date?
+    /// The App that narrowed the token, which revokes it after use; nil for an account's token.
+    let app: AppCredentials?
 }
 
 /// A session as the daemon reports it.
@@ -73,9 +76,9 @@ func actingAccount() throws -> String? {
 enum Grant {
     /// The token of one of your accounts.
     case account(String)
-    /// A token from the App: for a session that lists the repository, or (no session) once after Touch ID.
+    /// A token for the repository from your sign-in: for a session that lists it, or (no session) once after Touch ID.
     case app(session: SessionInfo?)
-    /// An issue-only token from the App, for a repository the session does not list.
+    /// An issue-only token, for a repository the session does not list.
     case issues(session: SessionInfo)
 }
 
@@ -112,11 +115,14 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
         guard let repository else {
             throw ToolError.missingRepository
         }
-        // nothing could be minted: say so before anyone is asked
+        // nothing could be issued: say so before anyone is asked
         let owner = ownerAccount(repository)
         guard hasAppCredentials(owner: owner) else {
             let logins = (try? storedUserLogins()) ?? []
             throw ToolError.noApp(owner: owner, logins: logins, program: forGit ? "git" : "gh")
+        }
+        guard hasSignIn(owner: owner) else {
+            throw ToolError.notSignedIn(owner)
         }
 
         let reply = agentRequest(["op": "check", "repo": repository])
@@ -128,7 +134,13 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
         fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
-        try authenticate(.appUse(by: requester(), use: use, repository: repository, app: appSlug(owner: owner)))
+        try authenticate(.appUse(
+            by: requester(),
+            use: use,
+            repository: repository,
+            app: appSlug(owner: owner),
+            login: signedInLogin(owner: owner)
+        ))
         return authorized(.app(session: nil))
     } catch {
         appendAccessLog("refused \(target) to \(chain): \(error)")
@@ -136,7 +148,7 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
     }
 }
 
-/// The token for an authorized use: an account's own, or a new one from the App.
+/// The token for an authorized use: an account's own, or one narrowed from your sign-in.
 func issueCredential(_ authorization: Authorization) throws -> GitHubCredential {
     let chain = authorization.chain
     do {
@@ -144,20 +156,19 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
         case let .account(login):
             let token = try loadUserToken(login: login)
             appendAccessLog("granted \(authorization.target) (as \(login)) to \(chain)")
-            return GitHubCredential(token: token, username: login, expires: nil)
+            return GitHubCredential(token: token, username: login, expires: nil, app: nil)
         case let .app(session):
             guard let repository = authorization.repository else {
                 throw ToolError.missingRepository
             }
             // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
             let elevated = agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true
-            let token = try mintInstallationToken(
-                repository: repository,
-                scope: .installation(includeWorkflows: elevated)
-            )
+            let token = try mintScopedToken(repository: repository, scope: .repository(includeWorkflows: elevated))
             let grant = session.map { "session \($0.label)" } ?? "once"
-            appendAccessLog("granted \(repository) (\(grant))\(elevated ? ", elevated" : "") to \(chain)")
-            return GitHubCredential(token: token.token, username: "x-access-token", expires: token.expires)
+            appendAccessLog(
+                "granted \(repository) (\(grant))\(elevated ? ", elevated" : "") as \(token.login) to \(chain)"
+            )
+            return GitHubCredential(token: token.token, username: token.login, expires: token.expires, app: token.app)
         case let .issues(session):
             guard let repository = authorization.repository else {
                 throw ToolError.missingRepository
@@ -171,19 +182,24 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
 }
 
 /// An issue-only token for a repository the session does not list. A public one takes Touch ID for this use, and
-/// Git gets nothing for it (it reads public repositories without a credential); the token is minted first, because
-/// its reply says whether the repository is public, and revoked when the use is not allowed.
+/// Git gets nothing for it (it reads public repositories without a credential); the token is made first, because it
+/// can read whether the repository is public, and revoked when the use is not allowed.
 private func issueOnlyCredential(
     repository: String,
     session: SessionInfo,
     authorization: Authorization
 ) throws -> GitHubCredential {
-    let minted = try mintInstallationToken(repository: repository, scope: .issues)
-    let credential = GitHubCredential(token: minted.token, username: "x-access-token", expires: minted.expires)
+    let minted = try mintScopedToken(repository: repository, scope: .issues)
+    let credential = GitHubCredential(
+        token: minted.token,
+        username: minted.login,
+        expires: minted.expires,
+        app: minted.app
+    )
     let grant = "session \(session.label)"
     do {
-        if try minted.isPrivate ?? isPrivateRepository(repository, token: minted.token) {
-            appendAccessLog("granted \(repository) (issues, \(grant)) to \(authorization.chain)")
+        if try isPrivateRepository(repository, token: minted.token) {
+            appendAccessLog("granted \(repository) (issues, \(grant)) as \(minted.login) to \(authorization.chain)")
             return credential
         }
         guard !authorization.forGit else {
@@ -191,17 +207,21 @@ private func issueOnlyCredential(
                 "\(repository) is public and outside the session; Git reads it without a credential"
             )
         }
+        let owner = ownerAccount(repository)
         try authenticate(.publicIssue(
             by: Requester(name: session.program, folder: session.folder),
             use: authorization.use,
             repository: repository,
-            app: appSlug(owner: ownerAccount(repository))
+            app: appSlug(owner: owner),
+            login: minted.login
         ))
     } catch {
         revokeAfterUse(credential, repository: repository)
         throw error
     }
-    appendAccessLog("granted \(repository) (issues, public, approved once, \(grant)) to \(authorization.chain)")
+    appendAccessLog(
+        "granted \(repository) (issues, public, approved once, \(grant)) as \(minted.login) to \(authorization.chain)"
+    )
     return credential
 }
 
@@ -252,13 +272,13 @@ private func awaitApproval(of session: SessionInfo) throws {
     throw ToolError.authenticationNotAnswered
 }
 
-/// Ends an App token after its single use; a failure is reported and logged, not fatal.
+/// Ends a narrowed token after its single use; a failure is reported and logged, not fatal.
 func revokeAfterUse(_ credential: GitHubCredential, repository: String) {
-    guard let expires = credential.expires else {
+    guard let app = credential.app, let expires = credential.expires else {
         return
     }
     do {
-        try revokeInstallationToken(credential.token)
+        try revokeScopedToken(credential.token, app: app)
     } catch {
         fputs("gh-touchid: could not revoke the token for \(repository); it expires at \(localTime(expires)): \(error)\n", stderr)
         appendAccessLog("could not revoke the token for \(repository): \(error)")

@@ -19,7 +19,7 @@ class GhTouchid < Formula
       gh-touchid installs beside Homebrew's gh; neither gh nor Git goes through it until you set them up.
 
       Git goes through gh-touchid for an owner's repositories after:
-        gh-touchid git-setup <owner>
+        gh-touchid git setup <owner>
 
       To run `gh` through gh-touchid, put its gh folder first in PATH, in your shell's profile (this path stays
       the same across updates):

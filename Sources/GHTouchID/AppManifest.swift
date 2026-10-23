@@ -1,11 +1,12 @@
 import Darwin
 import Foundation
-import Security
 
-// `app create <owner>`: GitHub's App manifest flow. A one-off web server on 127.0.0.1 serves a page that posts the
-// manifest to GitHub; once you choose Create GitHub App there, GitHub sends the browser back to the server with a code
-// and the `state` it was given, and the code buys the App's ID, client ID and private key. Only the client ID and key
-// are kept (in the Keychain, as `app set` does); the client and webhook secrets are dropped.
+// `app create <owner>`: GitHub's App manifest flow, then the sign-in, in one trip of the browser. The local server on
+// the callback port serves a page that posts the manifest to GitHub; once you choose Create GitHub App there, GitHub
+// sends the browser to /created with a code and the `state` it was given. The code buys the App's client ID and client
+// secret (its private key and webhook secret are dropped: gh-touchid never acts as the App), and the browser goes on
+// to GitHub's authorize page for the new App. After you choose Authorize, one Touch ID stores the App and your
+// sign-in, and the browser goes on to the App's installation page.
 
 private let manifestPermissions = [
     "actions": "write",
@@ -18,14 +19,13 @@ private let manifestPermissions = [
     "metadata": "read",
 ]
 
-/// How long the flow may take; GitHub's codes last an hour too.
+/// How long the manifest step may take; GitHub's codes last an hour too.
 private let manifestTimeout: TimeInterval = 60 * 60
 
 private struct CreatedApp {
     let id: Int
     let slug: String
-    let clientId: String
-    let pem: String
+    let credentials: AppCredentials
     let owner: String
     let ownerIsOrganization: Bool
 }
@@ -33,14 +33,16 @@ private struct CreatedApp {
 func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
     let web = try webBaseURL()
     let organization = try isOrganization(owner)
-    let server = try CallbackServer()
+    let server = try LocalServer(port: callbackPort)
     let state = randomHex(bytes: 16)
     let local = "http://127.0.0.1:\(server.port)"
     let manifest: [String: Any] = [
         "name": name,
         "url": "https://github.com/\(owner)",
         "public": false,
-        "redirect_url": "\(local)/callback",
+        "redirect_url": "\(local)/created",
+        "callback_urls": [callbackURL],
+        "request_oauth_on_install": false,
         "default_permissions": manifestPermissions,
         "default_events": [String](),
     ]
@@ -53,49 +55,98 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
     )
 
     fputs(
-        "To create the GitHub App \(name) for \(owner), open \(local)/ and choose Create GitHub App on GitHub "
+        "To create the GitHub App \(name) for \(owner), open \(local)/ and choose Create GitHub App, then Authorize "
             + "(waiting up to an hour).\n",
         stderr
     )
     if openBrowser {
         openInBrowser("\(local)/")
     }
-    let (client, query) = try server.awaitCallback(page: page, deadline: Date().addingTimeInterval(manifestTimeout))
-    guard query["state"] == state, let code = query["code"], isManifestCode(code) else {
-        respond(client, status: 400, text: "This is not the answer to gh-touchid's request; nothing was stored.")
-        close(client)
+    let created = try server.awaitRequest(
+        for: ["/created"],
+        pages: ["/": page],
+        deadline: Date().addingTimeInterval(manifestTimeout)
+    )
+    guard created.query["state"] == state, let code = created.query["code"], isManifestCode(code) else {
+        respond(created.client, status: 400, text: "This is not the answer to gh-touchid's request; nothing was stored.")
+        close(created.client)
         throw ToolError.refused("the callback did not carry this request's state and code; nothing was stored")
     }
-    respond(client, status: 200, text: "GitHub created the App. Finish in the terminal.")
-    close(client)
-
-    let app = try convertManifest(code: code)
-    guard app.owner.lowercased() == owner else {
-        let path = app.ownerIsOrganization ? "organizations/\(app.owner)/settings" : "settings"
-        throw ToolError.refused(
-            "GitHub created the App \(app.slug) for \(app.owner), not \(owner); nothing was stored. "
-                + "Delete it at \(web)/\(path)/apps/\(app.slug)/advanced"
-        )
+    let app: CreatedApp
+    do {
+        app = try convertManifest(code: code)
+    } catch {
+        respond(created.client, status: 200, text: "Nothing was stored: \(error)")
+        close(created.client)
+        throw error
     }
-    let key = try rsaPrivateKey(pem: app.pem)
-    try authenticate(.newApp(app.slug, owner: owner))
-    _ = try verifyAppKey(clientId: app.clientId, key: key)
-    try storeAppCredentials(AppCredentials(clientId: app.clientId, privateKey: app.pem), owner: owner, slug: app.slug)
+    let advanced = "\(web)/\(app.ownerIsOrganization ? "organizations/\(app.owner)/settings" : "settings")"
+        + "/apps/\(app.slug)/advanced"
+    guard app.owner.lowercased() == owner else {
+        let message = "GitHub created the App \(app.slug) for \(app.owner), not \(owner); nothing was stored. "
+            + "Delete it at \(advanced)"
+        respond(created.client, status: 200, text: message)
+        close(created.client)
+        throw ToolError.refused(message)
+    }
+
+    // on to the sign-in; the manifest page is no longer served, so that a reload cannot make a second App
+    let request = try signInRequest(app: app.credentials)
+    redirect(created.client, to: request.url)
+    close(created.client)
     let install = "\(web)/apps/\(app.slug)/installations/new"
+    let signIn: SignIn
+    let browser: Int32
+    do {
+        (signIn, browser) = try awaitSignIn(
+            request,
+            app: app.credentials,
+            owner: owner,
+            server: server,
+            deadline: Date().addingTimeInterval(signInTimeout)
+        )
+    } catch {
+        // the App exists on GitHub: keep it, so that `app login` can finish what is left
+        fputs("You are not signed in to the new App \(app.slug): \(error)\n", stderr)
+        try authenticate(.newApp(app.slug, owner: owner))
+        // a sign-in to a previous App would not work with this one
+        try withSignInLock(owner: owner) {
+            try storeAppCredentials(app.credentials, owner: owner, slug: app.slug)
+            _ = try? removeSignIn(owner: owner)
+        }
+        fputs(
+            "Stored the GitHub App \(app.slug) (ID \(app.id)) for \(owner). Sign in to it with "
+                + "`gh-touchid app login \(owner)`, and install it: \(install)\n",
+            stderr
+        )
+        return 1
+    }
+    defer { close(browser) }
+    do {
+        try authenticate(.signIn(signIn.login, owner: owner, app: app.slug, storesApp: true))
+    } catch {
+        respond(browser, status: 200, text: "Nothing was stored: \(error). Delete the App at \(advanced)")
+        throw ToolError.refused("\(error); nothing was stored. Delete the App \(app.slug) at \(advanced)")
+    }
+    do {
+        try storeSignedIn(signIn, app: app.credentials, slug: app.slug, owner: owner)
+    } catch {
+        respond(browser, status: 200, text: "\(error)")
+        throw error
+    }
+    redirect(browser, to: install)
+    appendAccessLog("stored the \(owner) App \(app.slug) and signed in as \(signIn.login)")
     fputs(
-        "Stored the GitHub App \(app.slug) (ID \(app.id)) for \(owner); GitHub accepted its key.\n"
+        "Stored the GitHub App \(app.slug) (ID \(app.id)) for \(owner) and signed you in to it as \(signIn.login).\n"
             + "Install it on the repositories agents should reach: \(install)\n",
         stderr
     )
-    if openBrowser {
-        openInBrowser(install)
-    }
     try offerGitSetup(owner: app.owner)
     return 0
 }
 
-/// `POST /app-manifests/{code}/conversions`, which needs no credential: the new App's settings and private key. Its
-/// reply holds the key and the App's secrets, so no part of it goes into an error.
+/// `POST /app-manifests/{code}/conversions`, which needs no credential: the new App's settings and secrets. Its reply
+/// holds the App's private key and secrets, so no part of it goes into an error.
 private func convertManifest(code: String) throws -> CreatedApp {
     let response = try githubAPI("POST", "/app-manifests/\(code)/conversions", bearer: nil)
     guard response.status == 201 else {
@@ -105,18 +156,18 @@ private func convertManifest(code: String) throws -> CreatedApp {
           let id = object["id"] as? Int,
           let slug = object["slug"] as? String, validOwner(slug) != nil,
           let clientId = object["client_id"] as? String, !clientId.isEmpty,
-          let pem = object["pem"] as? String,
+          let clientSecret = object["client_secret"] as? String, !clientSecret.isEmpty,
           let owner = object["owner"] as? [String: Any],
           let login = owner["login"] as? String, validOwner(login) != nil else {
         throw ToolError.github(
-            "GitHub's reply with the new App (HTTP 201) lacks its ID, slug, client ID, key or owner; nothing was stored"
+            "GitHub's reply with the new App (HTTP 201) lacks its ID, slug, client ID, client secret or owner; "
+                + "nothing was stored"
         )
     }
     return CreatedApp(
         id: id,
         slug: slug,
-        clientId: printable(clientId),
-        pem: pem,
+        credentials: AppCredentials(clientId: printable(clientId), clientSecret: clientSecret),
         owner: login,
         ownerIsOrganization: owner["type"] as? String == "Organization"
     )
@@ -126,22 +177,6 @@ private func isManifestCode(_ code: String) -> Bool {
     !code.isEmpty && code.count <= 100 && code.unicodeScalars.allSatisfy {
         CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_"
     }
-}
-
-private func randomHex(bytes count: Int) -> String {
-    var bytes = [UInt8](repeating: 0, count: count)
-    guard SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess else {
-        fatalError("no random bytes")
-    }
-    return bytes.map { String(format: "%02x", $0) }.joined()
-}
-
-private func htmlEscaped(_ text: String) -> String {
-    text.replacingOccurrences(of: "&", with: "&amp;")
-        .replacingOccurrences(of: "<", with: "&lt;")
-        .replacingOccurrences(of: ">", with: "&gt;")
-        .replacingOccurrences(of: "\"", with: "&quot;")
-        .replacingOccurrences(of: "'", with: "&#39;")
 }
 
 /// A page that posts `manifest` to `action` as soon as it loads (or when its button is pressed).
@@ -158,116 +193,4 @@ private func manifestPage(action: String, manifest: String, title: String) -> St
     <script>document.forms[0].submit()</script>
     </body></html>
     """
-}
-
-private func respond(_ client: Int32, status: Int, html: String) {
-    let reason = [200: "OK", 400: "Bad Request", 404: "Not Found"][status] ?? "Error"
-    let body = Data(html.utf8)
-    let head = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: text/html; charset=utf-8\r\n"
-        + "Content-Length: \(body.count)\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n"
-        + "Connection: close\r\n\r\n"
-    _ = writeAll(client, Data(head.utf8) + body)
-}
-
-private func respond(_ client: Int32, status: Int, text: String) {
-    respond(client, status: status, html: "<!doctype html><meta charset=\"utf-8\"><p>gh-touchid: \(htmlEscaped(text))</p>")
-}
-
-/// A one-off HTTP server on 127.0.0.1 and a random port: `/` serves the manifest page, `/callback` ends it.
-private final class CallbackServer {
-    let port: Int
-    private let listener: Int32
-
-    init() throws {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw ToolError.input("cannot create a socket")
-        }
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let listening = withUnsafeMutablePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { generic in
-                bind(fd, generic, length) == 0 && listen(fd, 8) == 0 && getsockname(fd, generic, &length) == 0
-            }
-        }
-        guard listening else {
-            close(fd)
-            throw ToolError.input("cannot listen on 127.0.0.1")
-        }
-        listener = fd
-        port = Int(UInt16(bigEndian: address.sin_port))
-    }
-
-    deinit {
-        close(listener)
-    }
-
-    /// Serves `page` until the first request for `/callback`, and returns that connection with its query.
-    func awaitCallback(page: String, deadline: Date) throws -> (Int32, [String: String]) {
-        while true {
-            let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else {
-                throw ToolError.refused("GitHub did not send the browser back within an hour; nothing was stored")
-            }
-            var waiting = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
-            guard poll(&waiting, 1, Int32(min(remaining, 60) * 1000)) > 0 else {
-                continue
-            }
-            let client = accept(listener, nil, nil)
-            guard client >= 0 else {
-                continue
-            }
-            configureSocket(client, timeoutSeconds: 10)
-            guard let target = requestTarget(client), let components = URLComponents(string: target) else {
-                respond(client, status: 400, text: "Bad request.")
-                close(client)
-                continue
-            }
-            switch components.path {
-            case "/":
-                respond(client, status: 200, html: page)
-                close(client)
-            case "/callback":
-                var query: [String: String] = [:]
-                for item in components.queryItems ?? [] {
-                    query[item.name] = item.value ?? ""
-                }
-                return (client, query)
-            default:
-                respond(client, status: 404, text: "Not found.")
-                close(client)
-            }
-        }
-    }
-
-    /// The target of a `GET` request (`/callback?code=…`), from its request line.
-    private func requestTarget(_ client: Int32) -> String? {
-        var head = Data()
-        var byte: UInt8 = 0
-        let end = Data("\r\n\r\n".utf8)
-        while head.count < 16384, !head.hasSuffix(end) {
-            guard read(client, &byte, 1) == 1 else {
-                return nil
-            }
-            head.append(byte)
-        }
-        guard let line = String(decoding: head, as: UTF8.self).split(separator: "\r\n").first else {
-            return nil
-        }
-        let parts = line.split(separator: " ")
-        guard parts.count == 3, parts[0] == "GET", parts[1].hasPrefix("/") else {
-            return nil
-        }
-        return String(parts[1])
-    }
-}
-
-private extension Data {
-    func hasSuffix(_ suffix: Data) -> Bool {
-        count >= suffix.count && self.suffix(suffix.count) == suffix
-    }
 }
