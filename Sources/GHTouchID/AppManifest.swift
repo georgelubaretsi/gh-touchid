@@ -3,9 +3,9 @@ import Foundation
 
 // `app create <owner>`: GitHub's App manifest flow, then the sign-in, in one trip of the browser. The local server on
 // the callback port serves a page that posts the manifest to GitHub; once you choose Create GitHub App there, GitHub
-// sends the browser to /created with a code and the `state` it was given. The code buys the App's client ID and
-// client secret (its private key and webhook secret are dropped: the App never acts as itself), and the browser goes
-// on to GitHub's authorize page for the new App. After you choose Authorize, one Touch ID stores the App and your
+// sends the browser to /created with a code and the `state` it was given. The code buys the App's client ID and client
+// secret (its private key and webhook secret are dropped: gh-touchid never acts as the App), and the browser goes on
+// to GitHub's authorize page for the new App. After you choose Authorize, one Touch ID stores the App and your
 // sign-in, and the browser goes on to the App's installation page.
 
 private let manifestPermissions = [

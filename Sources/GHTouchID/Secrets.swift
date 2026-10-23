@@ -5,7 +5,7 @@ import Security
 // Secrets live in the login Keychain as generic passwords (test builds: in files under GH_TOUCHID_TEST_DIR).
 // - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, clientSecret},
 //   and its slug as the item's comment (none for Apps stored by earlier versions). gh-touchid 0.3 and earlier stored
-//   {clientId, privateKey} here instead; such an item is refused, since its App would act as itself.
+//   {clientId, privateKey} here instead; such an item is refused, since with it gh-touchid acted as the App's bot.
 // - service `com.lubaretsi.gh-touchid.signin`, account = owner: your sign-in to that App as JSON {login, accessToken,
 //   accessExpires, refreshToken, refreshExpires} (expiries in seconds since 1970), and the login as its comment
 // - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`

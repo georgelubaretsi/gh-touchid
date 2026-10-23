@@ -3,8 +3,8 @@ import Foundation
 
 // Tokens that act as you, through the owner's GitHub App. Your sign-in to the App (an expiring user access token,
 // renewed with its refresh token) never leaves gh-touchid: each use narrows it to one repository and the permissions
-// that use may have (`POST /applications/{client_id}/token/scoped`), and that token is revoked after gh. The App never
-// acts as itself: gh-touchid holds no key for it, only the client secret that lets it narrow and revoke your tokens.
+// that use may have (`POST /applications/{client_id}/token/scoped`), and that token is revoked after gh. gh-touchid
+// never acts as the App: it holds no key for it, only the client secret that lets it narrow and revoke your tokens.
 
 /// A token for one repository that acts as `login`, and the App that made it (to revoke it).
 struct ScopedToken {

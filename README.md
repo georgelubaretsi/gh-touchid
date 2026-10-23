@@ -150,7 +150,8 @@ The browser then makes one trip through three pages on GitHub:
 
 1. **Create GitHub App.** GitHub creates the App for the account you are signed in as in that browser (or, when OWNER
    is an organization, for the organization). gh-touchid checks that the App belongs to OWNER and keeps its client ID
-   and client secret; the App's private key and webhook secret are dropped, so the App can never act as itself.
+   and client secret; the App's private key and webhook secret are dropped, so gh-touchid never acts as the App. (The
+   App's owner can still make a new private key on GitHub, which acts as the App's bot wherever it is installed.)
 2. **Authorize.** You sign in to the new App as yourself (GitHub's web flow with PKCE). gh-touchid gets your sign-in:
    an access token that lasts 8 hours and a refresh token that renews it for 6 months. One Touch ID then stores the
    App and your sign-in in your login Keychain (this Mac only, not synced).
@@ -484,6 +485,9 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
   secret stay in the Keychain: together they reach every repository the App is installed on, with all of its
   permissions, as far as your own access goes. gh-touchid uses them only to narrow, renew and revoke tokens. A
   refresh token works once, so renewing happens under a lock that other gh-touchid processes wait for.
+- gh-touchid holds no private key of the App, so nothing it keeps can act as the App's bot. Whoever owns the App on
+  GitHub (you, or your organization's owners) can still generate a new key in its settings, and with it act as the
+  bot on every account the App is installed on, as with any GitHub App.
 - Programs that `gh` itself starts while it runs (your editor or browser, Git and the repository's hooks, installed
   `gh` extensions) inherit its environment, token included.
 - `gh` commands that would print or store the token, or install aliases or extensions, are refused: `auth` other than
