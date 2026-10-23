@@ -335,17 +335,15 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
 private func showStatus() throws -> Int32 {
     let owners = try storedAppOwners()
     let logins = try storedUserLogins()
-    let newer = "stored by a newer gh-touchid: upgrade it"
     let apps = owners.map { owner -> String in
-        let format = max(storedFormat(.app(owner: owner)) ?? 1, storedFormat(.signIn(owner: owner)) ?? 1)
-        if format > itemFormat {
-            return "\(owner) (\(newer))"
+        if let problem = formatProblem(.app(owner: owner)) ?? formatProblem(.signIn(owner: owner)) {
+            return "\(owner) (\(problem))"
         }
         let signedIn = signedInLogin(owner: owner).map { "signed in as \($0)" }
         return "\(owner) (\(signedIn ?? "not signed in: gh-touchid app login \(owner)"))"
     }
     let accounts = logins.map { login in
-        (storedFormat(.account(login: login)) ?? 1) > itemFormat ? "\(login) (\(newer))" : login
+        formatProblem(.account(login: login)).map { "\(login) (\($0))" } ?? login
     }
     print("Apps (owners): \(apps.isEmpty ? "none" : apps.joined(separator: ", "))")
     print("Accounts: \(accounts.isEmpty ? "none" : accounts.joined(separator: ", "))")

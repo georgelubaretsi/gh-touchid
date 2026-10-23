@@ -58,25 +58,65 @@ enum StoredItem: CustomStringConvertible {
             return "token of \(login)"
         }
     }
+
+    /// The command that stores the item afresh.
+    var storeAgain: String {
+        switch self {
+        case let .app(owner):
+            return "run `gh-touchid app create \(owner)`"
+        case let .signIn(owner):
+            return "run `gh-touchid app login \(owner)`"
+        case let .account(login):
+            return "run `gh-touchid account add \(login)`"
+        }
+    }
 }
 
-/// The format `item` is stored in, read from its attributes; nil when there is no such item.
-func storedFormat(_ item: StoredItem) -> Int? {
-    guard hasSecret(service: item.service, account: item.account) else {
+/// The format of a stored item, as its description says. `readable(1)` also for an item without a description, as
+/// 0.4.0 wrote them; `unreadable` for a description that is not `gh-touchid format N`, as after an edit or damage.
+enum ItemFormat: Equatable {
+    case readable(Int)
+    case unreadable
+}
+
+/// The format `item` is stored in, from one read of its attributes; nil when there is no such item.
+func storedFormat(_ item: StoredItem) -> ItemFormat? {
+    let found = itemDescription(service: item.service, account: item.account)
+    guard found.exists else {
         return nil
     }
-    guard let description = secretDescription(service: item.service, account: item.account),
-          description.hasPrefix(formatPrefix), let format = Int(description.dropFirst(formatPrefix.count)),
-          format > 0 else {
-        return 1
+    guard let description = found.description else {
+        return .readable(1)
     }
-    return format
+    guard description.hasPrefix(formatPrefix), let format = Int(description.dropFirst(formatPrefix.count)),
+          format > 0 else {
+        return .unreadable
+    }
+    return .readable(format)
 }
 
-/// Refuses an item that a newer gh-touchid wrote; reads attributes only, so it may come before any dialog.
+/// What is wrong with an item's format for this gh-touchid, in `status`'s words; nil when it can read it.
+func formatProblem(_ item: StoredItem) -> String? {
+    switch storedFormat(item) {
+    case let .readable(format)? where format > itemFormat:
+        return "stored by a newer gh-touchid: upgrade it"
+    case .unreadable?:
+        return "its format is not readable: \(item.storeAgain)"
+    default:
+        return nil
+    }
+}
+
+/// Refuses an item that a newer gh-touchid wrote, or whose format cannot be read; reads attributes only, so it may
+/// come before any dialog.
 func checkFormat(_ item: StoredItem) throws {
-    if let format = storedFormat(item), format > itemFormat {
+    switch storedFormat(item) {
+    case let .readable(format)? where format > itemFormat:
         throw ToolError.newerFormat(item: "\(item)", format: format)
+    case .unreadable?:
+        throw ToolError.unreadableFormat(item: "\(item)", storeAgain: item.storeAgain)
+    default:
+        return
     }
 }
 
@@ -260,9 +300,13 @@ private func secretComment(service: String, account: String) -> String? {
         .map { String(decoding: $0, as: UTF8.self) }
 }
 
-private func secretDescription(service: String, account: String) -> String? {
-    FileManager.default.contents(atPath: descriptionPath(service: service, account: account))
-        .map { String(decoding: $0, as: UTF8.self) }
+/// Whether the item exists, and its description (nil when it has none).
+private func itemDescription(service: String, account: String) -> (exists: Bool, description: String?) {
+    guard FileManager.default.fileExists(atPath: secretPath(service: service, account: account)) else {
+        return (false, nil)
+    }
+    let description = FileManager.default.contents(atPath: descriptionPath(service: service, account: account))
+    return (true, description.map { String(decoding: $0, as: UTF8.self) })
 }
 
 private func deleteSecret(service: String, account: String) throws -> Bool {
@@ -364,12 +408,21 @@ private func secretComment(service: String, account: String) -> String? {
     secretAttribute(kSecAttrComment, service: service, account: account)
 }
 
-/// The item's description, which says its format, from its attributes; nil when there is no item or none.
-private func secretDescription(service: String, account: String) -> String? {
-    secretAttribute(kSecAttrDescription, service: service, account: account)
+/// Whether the item exists, and its description, which says its format (nil when it has none), from one read of its
+/// attributes: existence and description cannot disagree.
+private func itemDescription(service: String, account: String) -> (exists: Bool, description: String?) {
+    guard let attributes = itemAttributes(service: service, account: account) else {
+        return (false, nil)
+    }
+    return (true, attributes[kSecAttrDescription as String] as? String)
 }
 
 private func secretAttribute(_ key: CFString, service: String, account: String) -> String? {
+    itemAttributes(service: service, account: account)?[key as String] as? String
+}
+
+/// The item's attributes, never its data; nil when there is no such item or it cannot be read.
+private func itemAttributes(service: String, account: String) -> [String: Any]? {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
@@ -381,7 +434,7 @@ private func secretAttribute(_ key: CFString, service: String, account: String) 
     guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else {
         return nil
     }
-    return (item as? [String: Any])?[key as String] as? String
+    return item as? [String: Any]
 }
 
 private func deleteSecret(service: String, account: String) throws -> Bool {

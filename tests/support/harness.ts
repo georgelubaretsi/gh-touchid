@@ -296,9 +296,14 @@ export class TestEnv {
 
   /** Marks an item as written in `format`, as a gh-touchid of that format would. */
   writeFormat(service: string, account: string, format: number): void {
+    this.writeDescription(service, account, `gh-touchid format ${format}`);
+  }
+
+  /** Sets an item's description to any text, as an edit in Keychain Access or damage could. */
+  writeDescription(service: string, account: string, text: string): void {
     const folder = join(this.dir, "descriptions", service);
     mkdirSync(folder, { recursive: true, mode: 0o700 });
-    writeFileSync(join(folder, account), `gh-touchid format ${format}`, { mode: 0o600 });
+    writeFileSync(join(folder, account), text, { mode: 0o600 });
   }
 
   /** The accounts with an item of `service`. */

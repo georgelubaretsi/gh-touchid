@@ -582,7 +582,8 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
   ([details](#development-builds)).
 - Each item's description says its format (`gh-touchid format 1`; Keychain Access shows it as the item's kind). An
   item without one, as 0.4.0 wrote it, is format 1. A gh-touchid that finds an item in a newer format than its own
-  refuses it before any dialog, and `status` marks it: "stored by a newer gh-touchid: upgrade it".
+  refuses it before any dialog, and `status` marks it: "stored by a newer gh-touchid: upgrade it". A description that
+  says no format (changed in Keychain Access, or damaged) is refused too, with the command that stores the item again.
 - `status`, the hints and the checks before a dialog read only which items exist, their formats, the App's name (its
   slug) and the signed-in login. The last two are kept in the items' comments. They never read a secret. `status`
   also asks whether gh's own item `gh:github.com` exists, by its attributes alone.

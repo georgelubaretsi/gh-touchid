@@ -75,3 +75,39 @@ describe("items a newer gh-touchid wrote", () => {
     expect((await env.run(["status"])).stdout).toContain("Accounts: alice (stored by a newer gh-touchid: upgrade it)");
   });
 });
+
+describe("items whose format cannot be read", () => {
+  const damaged = ["gh-touchid format two", "gh-touchid format 0", "gh-touchid format 99999999999999999999", "Kind"];
+  const items: [string, string, string, string][] = [
+    ["the App", services.app, "acme", "gh-touchid app create acme"],
+    ["the sign-in", services.signIn, "acme", "gh-touchid app login acme"],
+  ];
+  for (const [what, service, account, again] of items) {
+    test(`${what} with a description that is not a format is refused before Touch ID, naming ${again}`, async () => {
+      await using env = await TestEnv.create();
+      seedAcme(env);
+      for (const text of damaged) {
+        env.writeDescription(service, account, text);
+        const result = await env.run(["gh", "-R", "acme/widgets", "issue", "list"]);
+        expect(result.status).toBe(1);
+        expect(result.auth).toEqual([]);
+        expect(result.stderr).toContain("does not say a format");
+        expect(result.stderr).toContain(again);
+        expect((await env.run(["status"])).stdout).toContain(`acme (its format is not readable: run \`${again}\`)`);
+      }
+      expect(env.mock.scopedTokens()).toEqual([]);
+      expect(env.ghCalls()).toEqual([]);
+    });
+  }
+
+  test("an account token with a description that is not a format is refused before Touch ID", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", "ghp_alice");
+    env.writeDescription(services.user, "alice", "gh-touchid format -1");
+    const result = await env.run(["as", "alice", "gh", "api", "user"]);
+    expect(result.status).toBe(1);
+    expect(result.auth).toEqual([]);
+    expect(result.stderr).toContain("gh-touchid account add alice");
+    expect(env.ghCalls()).toEqual([]);
+  });
+});

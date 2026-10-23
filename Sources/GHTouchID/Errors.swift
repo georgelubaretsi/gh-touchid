@@ -10,6 +10,7 @@ enum ToolError: Error, CustomStringConvertible {
     case missingAccount(String)
     case missingApp(String)
     case newerFormat(item: String, format: Int)
+    case unreadableFormat(item: String, storeAgain: String)
     case notSignedIn(String)
     case noApp(owner: String, logins: [String], program: String)
     case invalidToken
@@ -47,6 +48,9 @@ enum ToolError: Error, CustomStringConvertible {
         case let .newerFormat(item, format):
             return "the \(item) was stored by a newer gh-touchid, in format \(format) (this one reads up to "
                 + "format \(itemFormat)); upgrade gh-touchid"
+        case let .unreadableFormat(item, storeAgain):
+            return "the \(item) does not say a format gh-touchid can read (its Keychain description was changed?); "
+                + "\(storeAgain) to store it again"
         case let .notSignedIn(owner):
             return "you are not signed in to the GitHub App for \(owner), or the sign-in has ended; "
                 + "run `gh-touchid app login \(owner)`"
