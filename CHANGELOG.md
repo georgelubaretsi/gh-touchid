@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gh-touchid help <command>` and `gh-touchid <command> --help` print one command's usage; a wrong use of a
   command prints that command's usage instead of every command's.
 - `as <login> -- <command>`: a `--` before the command is accepted, and optional.
+- SECURITY.md says how to report a vulnerability privately; docs/threat-model.md describes what gh-touchid protects,
+  from whom, and what is out of scope.
 
 ### Changed
 

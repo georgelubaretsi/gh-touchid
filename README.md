@@ -522,7 +522,8 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
 ## Security model
 
 gh-touchid makes token use visible, approved and short-lived, and the access log shows who asked. It does not defend
-against code that already runs as you ([below](#what-gh-touchid-does-not-defend-against)).
+against code that already runs as you ([below](#what-gh-touchid-does-not-defend-against)). The full threat model is in
+[docs/threat-model.md](docs/threat-model.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ### Tokens and what they reach
 
