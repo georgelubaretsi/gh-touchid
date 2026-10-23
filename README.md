@@ -580,9 +580,12 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
   never synced.
 - A development build keeps its own items, under `com.lubaretsi.gh-touchid.dev.*`
   ([details](#development-builds)).
-- `status`, the hints and the checks before a dialog read only which items exist, the App's name (its slug) and the
-  signed-in login. Those two are kept in the items' comments. They never read a secret. `status` also asks whether
-  gh's own item `gh:github.com` exists, by its attributes alone.
+- Each item's description says its format (`gh-touchid format 1`; Keychain Access shows it as the item's kind). An
+  item without one, as 0.4.0 wrote it, is format 1. A gh-touchid that finds an item in a newer format than its own
+  refuses it before any dialog, and `status` marks it: "stored by a newer gh-touchid: upgrade it".
+- `status`, the hints and the checks before a dialog read only which items exist, their formats, the App's name (its
+  slug) and the signed-in login. The last two are kept in the items' comments. They never read a secret. `status`
+  also asks whether gh's own item `gh:github.com` exists, by its attributes alone.
 - Releases run with the hardened runtime, so another program cannot load code into gh-touchid to use the items;
   development builds and the build from source run without it. Either way gh-touchid itself enforces the protection:
   it asks for Touch ID or checks the session before it uses the items. But macOS lets a process read them once you
@@ -638,8 +641,8 @@ or answer the Keychain dialogs.
 
 ### From 0.3.1 or earlier to 0.4
 
-0.3.1 and earlier acted as each App's bot, with the App's private key. 0.4 acts as you, and refuses an App stored by
-an older version: "the App stored for OWNER comes from gh-touchid 0.3 or earlier". For each owner:
+0.3.1 and earlier acted as each App's bot, with the App's private key. 0.4 acts as you, and cannot use an App stored by
+an older version ("the stored App for OWNER is not valid"). For each owner:
 
 1. Run `gh-touchid app create OWNER` and go through **Create**, **Authorize** and **Install**. The new App is named
    `OWNER-touchid`, so it does not clash with the old default, `OWNER-agent`. It replaces the stored App.

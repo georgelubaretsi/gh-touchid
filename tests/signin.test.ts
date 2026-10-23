@@ -72,6 +72,10 @@ describe("app create", () => {
     const token = env.mock.userTokens()[0]!;
     expect(signInItem(env)).toMatchObject({ login: "alice", accessToken: token.token, refreshToken: token.refreshToken });
     expect(env.comment(services.signIn, "acme")).toBe("alice");
+    expect([env.description(services.app, "acme"), env.description(services.signIn, "acme")]).toEqual([
+      "gh-touchid format 1",
+      "gh-touchid format 1",
+    ]);
     expectPKCE(env);
     expect(env.accessLog().some((line) => line.includes(`stored the acme App ${app.slug} and signed in as alice`))).toBe(
       true,
@@ -148,14 +152,15 @@ describe("app login", () => {
     expect(env.items(services.signIn)).toEqual([]);
   });
 
-  test("an App stored by gh-touchid 0.3 is refused before the browser opens", async () => {
+  test("an App stored by a newer gh-touchid is refused before the browser opens", async () => {
     await using env = await TestEnv.create();
-    env.seedLegacyApp("acme", { clientId: "Iv1.legacy", privateKey: "-----BEGIN RSA PRIVATE KEY-----", slug: "acme-bot" });
+    env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret", slug: "acme-touchid" });
+    env.writeFormat(services.app, "acme", 2);
     const result = await env.run(["app", "login", "acme"]);
     expect(result.status).toBe(1);
     expect(result.open).toEqual([]);
     expect(result.auth).toEqual([]);
-    expect(result.stderr).toContain("gh-touchid app create acme");
+    expect(result.stderr).toContain("newer gh-touchid");
     expect(env.mock.requests).toEqual([]);
   });
 

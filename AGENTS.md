@@ -37,6 +37,8 @@ nix develop --command just package  # release tarball in dist/
   `pinnedGitHubCLI`.
 - Errors are `ToolError`s with lowercase messages that say what to run next.
 - Comments say why, in full sentences, and stay true when the code changes.
+- Changing what a stored item holds bumps `itemFormat` (Secrets.swift) and keeps reading the
+  earlier formats; add a test with an item in each format.
 
 ## Code Review Rules
 

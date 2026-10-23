@@ -9,7 +9,7 @@ enum ToolError: Error, CustomStringConvertible {
     case missingRepository
     case missingAccount(String)
     case missingApp(String)
-    case legacyApp(owner: String, slug: String?)
+    case newerFormat(item: String, format: Int)
     case notSignedIn(String)
     case noApp(owner: String, logins: [String], program: String)
     case invalidToken
@@ -44,11 +44,9 @@ enum ToolError: Error, CustomStringConvertible {
             return "no token is stored for the account \(login); run `gh-touchid account add \(login)` first"
         case let .missingApp(owner):
             return "no GitHub App is stored for \(owner); run `gh-touchid app create \(owner)` first"
-        case let .legacyApp(owner, slug):
-            let old = slug.map { "the old App \($0) (delete it in its settings on GitHub, under Advanced)" }
-                ?? "the old App"
-            return "the App stored for \(owner) comes from gh-touchid 0.3 or earlier, which acted as the App's bot; "
-                + "run `gh-touchid app create \(owner)` to make one that acts as you, then remove \(old)"
+        case let .newerFormat(item, format):
+            return "the \(item) was stored by a newer gh-touchid, in format \(format) (this one reads up to "
+                + "format \(itemFormat)); upgrade gh-touchid"
         case let .notSignedIn(owner):
             return "you are not signed in to the GitHub App for \(owner), or the sign-in has ended; "
                 + "run `gh-touchid app login \(owner)`"

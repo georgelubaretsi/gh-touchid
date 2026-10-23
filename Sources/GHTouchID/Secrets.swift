@@ -4,14 +4,81 @@ import Security
 
 // Secrets live in the login Keychain as generic passwords (test builds: in files under GH_TOUCHID_TEST_DIR).
 // - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, clientSecret},
-//   and its slug as the item's comment (none for Apps stored by earlier versions). gh-touchid 0.3 and earlier stored
-//   {clientId, privateKey} here instead; such an item is refused, since with it gh-touchid acted as the App's bot.
+//   and its slug as the item's comment
 // - service `com.lubaretsi.gh-touchid.signin`, account = owner: your sign-in to that App as JSON {login, accessToken,
 //   accessExpires, refreshToken, refreshExpires} (expiries in seconds since 1970), and the login as its comment
 // - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`
-// Accounts are lowercase. Items of gh-touchid 0.2 (service `com.lubaretsi.gh-touchid`) are no longer read.
+// Every item's description says its format (`gh-touchid format 1`; see `itemFormat`). Accounts are lowercase.
 // gh's own sign-in, service `gh:github.com`, is only looked up, to tell whether another gh is signed in.
-// Listing, existence checks, the App's slug and the signed-in login read attributes only, never a secret.
+// Listing, existence checks, the formats, the App's slug and the signed-in login read attributes only, never a secret.
+
+/// The format gh-touchid writes its items in, kept in each item's description (Keychain Access shows it as the item's
+/// kind), so that it can be read without the secret. An item without one was written by 0.4.0, in format 1. Whoever
+/// changes what an item holds gives the format the next number and reads the earlier ones; a gh-touchid that finds an
+/// item in a format above its own refuses it rather than misreading it.
+let itemFormat = 1
+
+private let formatPrefix = "gh-touchid format "
+/// What every item's description says.
+private let formatDescription = "\(formatPrefix)\(itemFormat)"
+
+/// One of gh-touchid's items, as messages name it.
+enum StoredItem: CustomStringConvertible {
+    case app(owner: String)
+    case signIn(owner: String)
+    case account(login: String)
+
+    fileprivate var service: String {
+        switch self {
+        case .app:
+            return appService
+        case .signIn:
+            return signInService
+        case .account:
+            return userService
+        }
+    }
+
+    fileprivate var account: String {
+        switch self {
+        case let .app(owner), let .signIn(owner):
+            return owner
+        case let .account(login):
+            return login
+        }
+    }
+
+    var description: String {
+        switch self {
+        case let .app(owner):
+            return "App for \(owner)"
+        case let .signIn(owner):
+            return "sign-in to the \(owner) App"
+        case let .account(login):
+            return "token of \(login)"
+        }
+    }
+}
+
+/// The format `item` is stored in, read from its attributes; nil when there is no such item.
+func storedFormat(_ item: StoredItem) -> Int? {
+    guard hasSecret(service: item.service, account: item.account) else {
+        return nil
+    }
+    guard let description = secretDescription(service: item.service, account: item.account),
+          description.hasPrefix(formatPrefix), let format = Int(description.dropFirst(formatPrefix.count)),
+          format > 0 else {
+        return 1
+    }
+    return format
+}
+
+/// Refuses an item that a newer gh-touchid wrote; reads attributes only, so it may come before any dialog.
+func checkFormat(_ item: StoredItem) throws {
+    if let format = storedFormat(item), format > itemFormat {
+        throw ToolError.newerFormat(item: "\(item)", format: format)
+    }
+}
 
 /// A development build (one with no pinned gh, outside tests) keeps its items under `com.lubaretsi.gh-touchid.dev.*`,
 /// so that trying one never reads or replaces the Apps, sign-ins and tokens of an installed gh-touchid.
@@ -32,12 +99,6 @@ struct AppCredentials: Codable {
     let clientSecret: String
 }
 
-/// What gh-touchid 0.3 and earlier stored for an App: its private key, with which the App acted as its own bot.
-private struct LegacyAppCredentials: Decodable {
-    let clientId: String
-    let privateKey: String
-}
-
 /// Stores the owner's App; `slug` (from GitHub) is what the approval window calls it.
 func storeAppCredentials(_ credentials: AppCredentials, owner: String, slug: String?) throws {
     let data = try JSONEncoder().encode(credentials)
@@ -46,16 +107,14 @@ func storeAppCredentials(_ credentials: AppCredentials, owner: String, slug: Str
 }
 
 func loadAppCredentials(owner: String) throws -> AppCredentials {
+    try checkFormat(.app(owner: owner))
     guard let data = try loadSecret(service: appService, account: owner) else {
         throw ToolError.missingApp(owner)
     }
-    if let credentials = try? JSONDecoder().decode(AppCredentials.self, from: data) {
-        return credentials
+    guard let credentials = try? JSONDecoder().decode(AppCredentials.self, from: data) else {
+        throw ToolError.keychain("the stored App for \(owner) is not valid; run `gh-touchid app create \(owner)` again")
     }
-    if (try? JSONDecoder().decode(LegacyAppCredentials.self, from: data)) != nil {
-        throw ToolError.legacyApp(owner: owner, slug: appSlug(owner: owner))
-    }
-    throw ToolError.keychain("the stored App for \(owner) is not valid; run `gh-touchid app create \(owner)` again")
+    return credentials
 }
 
 func hasAppCredentials(owner: String) -> Bool {
@@ -90,6 +149,7 @@ func storeSignIn(_ signIn: SignIn, owner: String) throws {
 }
 
 func loadSignIn(owner: String) throws -> SignIn {
+    try checkFormat(.signIn(owner: owner))
     guard let data = try loadSecret(service: signInService, account: owner) else {
         throw ToolError.notSignedIn(owner)
     }
@@ -119,6 +179,7 @@ func storeUserToken(_ token: String, login: String) throws {
 }
 
 func loadUserToken(login: String) throws -> String {
+    try checkFormat(.account(login: login))
     guard let data = try loadSecret(service: userService, account: login) else {
         throw ToolError.missingAccount(login)
     }
@@ -162,9 +223,15 @@ private func commentPath(service: String, account: String) -> String {
     (testDirectory as NSString).appendingPathComponent("comments/\(service)/\(account)")
 }
 
+/// Where a test build keeps an item's description, which says its format.
+private func descriptionPath(service: String, account: String) -> String {
+    (testDirectory as NSString).appendingPathComponent("descriptions/\(service)/\(account)")
+}
+
 private func storeSecret(_ data: Data, service: String, account: String, label _: String, comment: String?) throws {
     for (path, contents) in [(secretPath(service: service, account: account), data),
-                             (commentPath(service: service, account: account), comment.map { Data($0.utf8) })] {
+                             (commentPath(service: service, account: account), comment.map { Data($0.utf8) }),
+                             (descriptionPath(service: service, account: account), Data(formatDescription.utf8))] {
         guard let contents else {
             continue
         }
@@ -193,6 +260,11 @@ private func secretComment(service: String, account: String) -> String? {
         .map { String(decoding: $0, as: UTF8.self) }
 }
 
+private func secretDescription(service: String, account: String) -> String? {
+    FileManager.default.contents(atPath: descriptionPath(service: service, account: account))
+        .map { String(decoding: $0, as: UTF8.self) }
+}
+
 private func deleteSecret(service: String, account: String) throws -> Bool {
     let path = secretPath(service: service, account: account)
     guard FileManager.default.fileExists(atPath: path) else {
@@ -200,6 +272,7 @@ private func deleteSecret(service: String, account: String) throws -> Bool {
     }
     try FileManager.default.removeItem(atPath: path)
     try? FileManager.default.removeItem(atPath: commentPath(service: service, account: account))
+    try? FileManager.default.removeItem(atPath: descriptionPath(service: service, account: account))
     return true
 }
 
@@ -216,7 +289,7 @@ private func keychainError(_ status: OSStatus) -> String {
     return "OSStatus \(status)"
 }
 
-/// Stores the item's data and label, and its comment unless `comment` is nil.
+/// Stores the item's data, label and format, and its comment unless `comment` is nil.
 private func storeSecret(_ data: Data, service: String, account: String, label: String, comment: String?) throws {
     let lookup: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
@@ -227,6 +300,7 @@ private func storeSecret(_ data: Data, service: String, account: String, label: 
     var update: [String: Any] = [
         kSecValueData as String: data,
         kSecAttrLabel as String: label,
+        kSecAttrDescription as String: formatDescription,
     ]
     update[kSecAttrComment as String] = comment
 
@@ -287,6 +361,15 @@ private func hasSecret(service: String, account: String) -> Bool {
 
 /// The item's comment, from its attributes; nil when there is no item or no comment.
 private func secretComment(service: String, account: String) -> String? {
+    secretAttribute(kSecAttrComment, service: service, account: account)
+}
+
+/// The item's description, which says its format, from its attributes; nil when there is no item or none.
+private func secretDescription(service: String, account: String) -> String? {
+    secretAttribute(kSecAttrDescription, service: service, account: account)
+}
+
+private func secretAttribute(_ key: CFString, service: String, account: String) -> String? {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
@@ -298,7 +381,7 @@ private func secretComment(service: String, account: String) -> String? {
     guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else {
         return nil
     }
-    return (item as? [String: Any])?[kSecAttrComment as String] as? String
+    return (item as? [String: Any])?[key as String] as? String
 }
 
 private func deleteSecret(service: String, account: String) throws -> Bool {

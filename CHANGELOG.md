@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Every stored item (App, sign-in, account token) says its format in its Keychain description: `gh-touchid format 1`.
+  Items 0.4.0 stored without one are format 1. An item a newer gh-touchid stored in a later format is refused before
+  any Touch ID, and `status` marks it "stored by a newer gh-touchid: upgrade it".
+
+### Removed
+
+- Recognizing an App stored by 0.3.1 or earlier: such an item is now reported as not valid, like any other unreadable
+  one; `app create` replaces it.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
