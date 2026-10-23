@@ -109,6 +109,7 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
             guard hasUserToken(login: account) else {
                 throw ToolError.missingAccount(account)
             }
+            try checkFormat(.account(login: account))
             try authenticate(.acting(as: account, by: requester(), use: use, repository: repository))
             return authorized(.account(account))
         }
@@ -124,6 +125,8 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
         guard hasSignIn(owner: owner) else {
             throw ToolError.notSignedIn(owner)
         }
+        try checkFormat(.app(owner: owner))
+        try checkFormat(.signIn(owner: owner))
 
         let reply = agentRequest(["op": "check", "repo": repository])
         if let session = SessionInfo(reply?["session"]) {

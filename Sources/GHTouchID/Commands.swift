@@ -335,11 +335,18 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
 private func showStatus() throws -> Int32 {
     let owners = try storedAppOwners()
     let logins = try storedUserLogins()
-    let apps = owners.map { owner in
-        "\(owner) (\(signedInLogin(owner: owner).map { "signed in as \($0)" } ?? "not signed in: gh-touchid app login \(owner)"))"
+    let apps = owners.map { owner -> String in
+        if let problem = formatProblem(.app(owner: owner)) ?? formatProblem(.signIn(owner: owner)) {
+            return "\(owner) (\(problem))"
+        }
+        let signedIn = signedInLogin(owner: owner).map { "signed in as \($0)" }
+        return "\(owner) (\(signedIn ?? "not signed in: gh-touchid app login \(owner)"))"
+    }
+    let accounts = logins.map { login in
+        formatProblem(.account(login: login)).map { "\(login) (\($0))" } ?? login
     }
     print("Apps (owners): \(apps.isEmpty ? "none" : apps.joined(separator: ", "))")
-    print("Accounts: \(logins.isEmpty ? "none" : logins.joined(separator: ", "))")
+    print("Accounts: \(accounts.isEmpty ? "none" : accounts.joined(separator: ", "))")
     gitStatus(owners: owners).forEach { print($0) }
     let reply = agentRequest(["op": "status"])
     let sessions = (reply?["sessions"] as? [Any] ?? []).compactMap(SessionInfo.init)

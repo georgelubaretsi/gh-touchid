@@ -56,7 +56,8 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 4. **gh-touchid ↔ GitHub.** All token minting and revocation happens here; GitHub enforces the narrowed scope.
 5. **Browser ↔ local server.** The sign-in result crosses here; `state` and PKCE bind it to this attempt.
 6. **gh-touchid ↔ Keychain.** Items are read only after Touch ID or a session check; `status` and the checks before
-   a dialog read attributes only (which items exist, the App's slug, the signed-in login).
+   a dialog read attributes only (which items exist, their formats, the App's slug, the signed-in login). An item in a
+   format newer than this gh-touchid's is refused, not misread.
 
 ## Invariants reviewers should hold
 

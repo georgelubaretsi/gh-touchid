@@ -262,7 +262,8 @@ export class TestEnv {
     return this.startCommand(command, options).finished;
   }
 
-  // Stored items, as test builds keep them: secrets/<service>/<account>, comments/<service>/<account>
+  // Stored items, as test builds keep them: secrets/<service>/<account>, comments/<service>/<account>, and
+  // descriptions/<service>/<account> (the item's format, `gh-touchid format N`; none for items 0.4.0 wrote)
 
   writeItem(service: string, account: string, secret: string, comment?: string): void {
     const write = (kind: "secrets" | "comments", contents: string) => {
@@ -287,6 +288,24 @@ export class TestEnv {
     return existsSync(path) ? readFileSync(path, "utf8") : undefined;
   }
 
+  /** An item's description, which says its format, or undefined when it has none. */
+  description(service: string, account: string): string | undefined {
+    const path = join(this.dir, "descriptions", service, account);
+    return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+  }
+
+  /** Marks an item as written in `format`, as a gh-touchid of that format would. */
+  writeFormat(service: string, account: string, format: number): void {
+    this.writeDescription(service, account, `gh-touchid format ${format}`);
+  }
+
+  /** Sets an item's description to any text, as an edit in Keychain Access or damage could. */
+  writeDescription(service: string, account: string, text: string): void {
+    const folder = join(this.dir, "descriptions", service);
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    writeFileSync(join(folder, account), text, { mode: 0o600 });
+  }
+
   /** The accounts with an item of `service`. */
   items(service: string): string[] {
     const folder = join(this.dir, "secrets", service);
@@ -296,12 +315,6 @@ export class TestEnv {
   /** An owner's App as plan B stores it: `{clientId, clientSecret}`, the slug as its comment. */
   seedApp(owner: string, app: { clientId: string; clientSecret: string; slug?: string }): void {
     const secret = JSON.stringify({ clientId: app.clientId, clientSecret: app.clientSecret });
-    this.writeItem(services.app, owner.toLowerCase(), secret, app.slug);
-  }
-
-  /** An owner's App as 0.3 and earlier stored it: `{clientId, privateKey}`. */
-  seedLegacyApp(owner: string, app: { clientId: string; privateKey: string; slug?: string }): void {
-    const secret = JSON.stringify({ clientId: app.clientId, privateKey: app.privateKey });
     this.writeItem(services.app, owner.toLowerCase(), secret, app.slug);
   }
 
