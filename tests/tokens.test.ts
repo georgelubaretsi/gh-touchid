@@ -249,6 +249,9 @@ describe("gh api names its repository", () => {
     ["api", "/repos/acme/widgets/pulls?state=all"],
     ["api", `${url}/repos/acme/widgets`],
     ["api", "-X", "GET", "-H", "Accept: application/json", "--paginate", "repos/acme/widgets/pulls"],
+    // grouped short flags: the first that takes a value takes the next argument, or the rest of the group
+    ["api", "-iH", "Accept: application/json", "repos/acme/widgets/issues"],
+    ["api", "-iXGET", "repos/acme/widgets/issues"],
   ];
 
   test("repos/OWNER/REPO in the endpoint wins over the current repository", async () => {

@@ -120,10 +120,14 @@ private func setApp(owner: String, _ arguments: [String], openBrowser: Bool) thr
     let slug = installedAppSlug(token: signIn.accessToken)
     do {
         try authenticate(.signIn(signIn.login, owner: owner, app: slug, storesApp: true))
-        try storeAppCredentials(app, owner: owner, slug: slug)
-        try storeSignIn(signIn, owner: owner)
     } catch {
         respond(browser, status: 200, text: "Nothing was stored: \(error)")
+        throw error
+    }
+    do {
+        try storeSignedIn(signIn, app: app, slug: slug, owner: owner)
+    } catch {
+        respond(browser, status: 200, text: "\(error)")
         throw error
     }
     respond(browser, status: 200, text: "Signed in as \(signIn.login). You can close this tab.")
@@ -136,7 +140,7 @@ private func setApp(owner: String, _ arguments: [String], openBrowser: Bool) thr
     return 0
 }
 
-/// gh with a token from the owner's App, or with the token of `account`.
+/// gh with a token narrowed from your sign-in to the owner's App, or with the token of `account`.
 func runGitHub(_ arguments: [String], account: String?) throws -> Int32 {
     guard !isForbiddenGitHubCommand(arguments) else {
         let command = commandSummary(["gh"] + arguments.prefix(2))

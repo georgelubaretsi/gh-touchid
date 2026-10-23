@@ -147,7 +147,8 @@ private func currentSignIn(owner: String, app: AppCredentials) throws -> SignIn 
     }
 }
 
-private func withSignInLock<T>(owner: String, _ body: () throws -> T) throws -> T {
+/// Runs `body` holding the owner's sign-in lock: renewals, sign-ins and App replacements for one owner take turns.
+func withSignInLock<T>(owner: String, _ body: () throws -> T) throws -> T {
     try ensureSessionDirectory()
     let path = (sessionDirectory as NSString).appendingPathComponent("signin-\(owner).lock")
     let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)

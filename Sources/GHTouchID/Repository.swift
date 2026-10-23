@@ -184,8 +184,18 @@ func apiEndpointRepository(_ arguments: [String]) -> String? {
             let name = String(argument.dropFirst(2).prefix { $0 != "=" })
             index += !argument.contains("=") && apiValueFlags.long.contains(name) ? 2 : 1
         } else if argument.count > 1, argument.hasPrefix("-") {
-            let shorthand = argument[argument.index(after: argument.startIndex)]
-            index += argument.count == 2 && apiValueFlags.short.contains(shorthand) ? 2 : 1
+            // a group such as `-iH`: its first flag that takes a value takes the rest of the group, or else the next
+            // argument
+            var group = argument.dropFirst()
+            var takesNext = false
+            while let shorthand = group.first {
+                group = group.dropFirst()
+                if apiValueFlags.short.contains(shorthand) {
+                    takesNext = group.isEmpty
+                    break
+                }
+            }
+            index += takesNext ? 2 : 1
         } else {
             endpoint = argument
             break

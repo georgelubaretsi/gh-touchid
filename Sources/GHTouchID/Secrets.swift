@@ -108,6 +108,11 @@ func signedInLogin(owner: String) -> String? {
     secretComment(service: signInService, account: owner).flatMap(validOwner)
 }
 
+/// Removes the owner's sign-in; false when none was stored.
+func removeSignIn(owner: String) throws -> Bool {
+    try deleteSecret(service: signInService, account: owner)
+}
+
 func storeUserToken(_ token: String, login: String) throws {
     let label = "gh-touchid account \(login)"
     try storeSecret(Data(token.utf8), service: userService, account: login, label: label, comment: nil)

@@ -109,7 +109,11 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
         // the App exists on GitHub: keep it, so that `app login` can finish what is left
         fputs("You are not signed in to the new App \(app.slug): \(error)\n", stderr)
         try authenticate(.newApp(app.slug, owner: owner))
-        try storeAppCredentials(app.credentials, owner: owner, slug: app.slug)
+        // a sign-in to a previous App would not work with this one
+        try withSignInLock(owner: owner) {
+            try storeAppCredentials(app.credentials, owner: owner, slug: app.slug)
+            _ = try? removeSignIn(owner: owner)
+        }
         fputs(
             "Stored the GitHub App \(app.slug) (ID \(app.id)) for \(owner). Sign in to it with "
                 + "`gh-touchid app login \(owner)`, and install it: \(install)\n",
@@ -120,11 +124,15 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Int32 {
     defer { close(browser) }
     do {
         try authenticate(.signIn(signIn.login, owner: owner, app: app.slug, storesApp: true))
-        try storeAppCredentials(app.credentials, owner: owner, slug: app.slug)
-        try storeSignIn(signIn, owner: owner)
     } catch {
         respond(browser, status: 200, text: "Nothing was stored: \(error). Delete the App at \(advanced)")
         throw ToolError.refused("\(error); nothing was stored. Delete the App \(app.slug) at \(advanced)")
+    }
+    do {
+        try storeSignedIn(signIn, app: app.credentials, slug: app.slug, owner: owner)
+    } catch {
+        respond(browser, status: 200, text: "\(error)")
+        throw error
     }
     redirect(browser, to: install)
     appendAccessLog("stored the \(owner) App \(app.slug) and signed in as \(signIn.login)")

@@ -111,15 +111,42 @@ func appLogin(owner: String, openBrowser: Bool) throws -> Int32 {
     defer { close(browser) }
     do {
         try authenticate(.signIn(signIn.login, owner: owner, app: slug, storesApp: false))
-        try storeSignIn(signIn, owner: owner)
     } catch {
         respond(browser, status: 200, text: "Nothing was stored: \(error)")
+        throw error
+    }
+    do {
+        try storeSignedIn(signIn, app: nil, slug: slug, owner: owner)
+    } catch {
+        respond(browser, status: 200, text: "\(error)")
         throw error
     }
     respond(browser, status: 200, text: "Signed in as \(signIn.login). You can close this tab.")
     appendAccessLog("signed in as \(signIn.login) to the \(owner) App")
     fputs("Signed in to \(appWords(slug, owner: owner)) as \(signIn.login).\n", stderr)
     return 0
+}
+
+/// Stores your sign-in, and first the App it belongs to when `app` is given, holding the owner's sign-in lock: a
+/// renewal running meanwhile then cannot store an older sign-in over it. When the App is stored but the sign-in is not,
+/// the sign-in left over from the previous App is removed, and the error says how to finish.
+func storeSignedIn(_ signIn: SignIn, app: AppCredentials?, slug: String?, owner: String) throws {
+    try withSignInLock(owner: owner) {
+        guard let app else {
+            try storeSignIn(signIn, owner: owner)
+            return
+        }
+        try storeAppCredentials(app, owner: owner, slug: slug)
+        do {
+            try storeSignIn(signIn, owner: owner)
+        } catch {
+            _ = try? removeSignIn(owner: owner)
+            throw ToolError.keychain(
+                "stored \(appWords(slug, owner: owner)) for \(owner) but not your sign-in (\(error)); "
+                    + "run `gh-touchid app login \(owner)`"
+            )
+        }
+    }
 }
 
 /// The slug of the App your sign-in reaches, from any of its installations you can access (`GET /user/installations`);

@@ -184,8 +184,8 @@ sign-in, and it asks the same question about Git.
 ### Signing in again
 
 gh-touchid renews your sign-in as you use it. After six months without use, or once you revoke it on GitHub
-(**Settings → Applications → Authorized GitHub Apps**), `gh` and Git are refused before any dialog with "you are not
-signed in"; sign in again with:
+(**Settings → Applications → Authorized GitHub Apps**), `gh` and Git fail with "you are not signed in" (after the
+use's Touch ID, if it asks one: only then does gh-touchid read the sign-in); sign in again with:
 
 ```sh
 gh-touchid app login OWNER [--no-open]
