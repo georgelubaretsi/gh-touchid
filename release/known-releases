@@ -10,3 +10,4 @@
 # lowercase hex digits. Lines starting with # and empty lines are ignored.
 0.4.0 trusted arm64=1ba296cc6662f7d96f726ffc18404c839c446a6c x86_64=df98abc9be8ac0a3752f14ecbc76b0c9f1d71ffc
 0.4.1 trusted arm64=0bb5bd491364fe555ef9c0d471e3639ff9444844 x86_64=8c0518e3193fc95c528a5b38d462d7f1c3b6eeb1
+0.4.2 trusted arm64=6899b57595aaa8e79e4b7eea95a3e5969f8fc699 x86_64=74bc3488d0fee59116aed67f4b54751da0daa0fc
