@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
 ### Added
 
 - Every stored item (App, sign-in, account token) says its format in its Keychain description: `gh-touchid format 1`.
