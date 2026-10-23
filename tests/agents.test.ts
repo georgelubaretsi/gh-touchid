@@ -354,4 +354,19 @@ describe("an agent of 0.4.1", () => {
     expect(status.stdout).toMatch(/^ {2}pending +bun\[\d+\].*: acme\/gadgets$/m);
     expect(status.stdout).toMatch(/^ {2}acme\/widgets +until .* \(gh-touchid 0\.4\.1\)$/m);
   });
+
+  test("elevated a repository: tokens include workflows even when a session here decides", async () => {
+    await using env = await TestEnv.create();
+    const { installation } = seedAcme(env);
+    const elevated = await env.run(["elevate", "--for", "1h", "--repo", "acme/widgets"], { binary: builds.legacy });
+    expect(elevated.status).toBe(0);
+    await approvedSession(env, binary);
+
+    const result = await env.run(use);
+    expect(result.status).toBe(0);
+    expect(result.auth).toEqual([]);
+    expect(installation.permissions.workflows).toBeDefined();
+    expect(env.mock.scopedTokens().at(-1)?.permissions).toEqual(installation.permissions);
+    expect(env.accessLog().join("\n")).toMatch(/granted acme\/widgets \(session bun\[\d+\]\), elevated/);
+  });
 });

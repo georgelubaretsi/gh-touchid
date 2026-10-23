@@ -180,17 +180,17 @@ private func takeOverRevokedAgent(version: String, holder: String) {
     )
 }
 
-/// Whether tokens for `repository` include workflows now: elevated in the agent, or in the 0.4.0/0.4.1 agent that
-/// holds `session`.
-func isElevated(_ repository: String, session: SessionInfo?) -> Bool {
+/// Whether tokens for `repository` include workflows now: elevated in the agent, or in any agent of 0.4.0/0.4.1 on
+/// the built-in list as trusted. An elevation is the repository's, whichever session (or none) a use goes through, as
+/// it was in those releases; `status` lists them the same way.
+func isElevated(_ repository: String) -> Bool {
     if agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true {
         return true
     }
-    guard let legacy = session?.legacy else {
-        return false
+    return legacySockets().contains { socket in
+        legacyRequest(socket, ["op": "check", "repo": repository], accepts: isOlderRelease)?.0["elevated"] as? Bool
+            == true
     }
-    let reply = legacyRequest(legacy.socket, ["op": "check", "repo": repository], accepts: isOlderRelease)
-    return reply?.0["elevated"] as? Bool == true
 }
 
 /// Ends every session and elevation: in the agent (one this gh-touchid trusts, or a revoked one) and in every agent

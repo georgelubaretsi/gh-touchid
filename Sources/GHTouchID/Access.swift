@@ -176,7 +176,7 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
                 throw ToolError.missingRepository
             }
             // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
-            let elevated = isElevated(repository, session: session)
+            let elevated = isElevated(repository)
             let token = try mintScopedToken(repository: repository, scope: .repository(includeWorkflows: elevated))
             let grant = session.map { "session \($0.label)\($0.legacy.map { " of \($0.marker)" } ?? "")" } ?? "once"
             appendAccessLog(
