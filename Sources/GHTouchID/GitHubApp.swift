@@ -29,8 +29,7 @@ private let renewalMargin: TimeInterval = 60 * 60
 /// A token for one repository, acting as you, from your sign-in to its owner's App.
 func mintScopedToken(repository: String, scope: TokenScope) throws -> ScopedToken {
     let owner = ownerAccount(repository)
-    let app = try loadAppCredentials(owner: owner)
-    let signIn = try currentSignIn(owner: owner, app: app)
+    let (app, signIn) = try currentSignIn(owner: owner)
     let permissions: [String: Any]
     switch scope {
     case let .repository(includeWorkflows):
@@ -120,15 +119,18 @@ func installHint(owner: String) -> String {
     return "; install it at \(web)/apps/\(slug)/installations/new"
 }
 
-/// Your sign-in to the owner's App with at least `renewalMargin` left, renewed first when needed. Renewing replaces
-/// the refresh token (GitHub accepts each one once), so it happens under a lock that other gh-touchid processes for the
-/// same owner wait for; they then find the renewed sign-in.
-private func currentSignIn(owner: String, app: AppCredentials) throws -> SignIn {
+/// The owner's App and your sign-in to it with at least `renewalMargin` left, renewed first when needed. Both are read
+/// under the owner's sign-in lock, so that an `app create`, `app set` or `app login` storing a new pair meanwhile can
+/// never leave this use with one App's secret and another's sign-in. Renewing replaces the refresh token (GitHub
+/// accepts each one once); other gh-touchid processes for the same owner wait for the lock and then find the renewed
+/// sign-in.
+private func currentSignIn(owner: String) throws -> (AppCredentials, SignIn) {
     try withSignInLock(owner: owner) {
+        let app = try loadAppCredentials(owner: owner)
         let signIn = try loadSignIn(owner: owner)
         let now = Date().timeIntervalSince1970
         if signIn.accessExpires - now > renewalMargin {
-            return signIn
+            return (app, signIn)
         }
         guard signIn.refreshExpires - now > 60 else {
             throw ToolError.notSignedIn(owner)
@@ -143,7 +145,7 @@ private func currentSignIn(owner: String, app: AppCredentials) throws -> SignIn 
         let renewed = pair.signIn(login: signIn.login)
         try storeSignIn(renewed, owner: owner)
         appendAccessLog("renewed the sign-in of \(signIn.login) to the \(owner) App")
-        return renewed
+        return (app, renewed)
     }
 }
 
