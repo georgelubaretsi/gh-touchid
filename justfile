@@ -17,9 +17,10 @@ package *args:
 check-formula tarball="dist":
     nix run .#check-formula -- {{ tarball }}
 
-# The black-box tests in tests/ (Bun) against a test build in build/test/gh-touchid, made with $XCODE when it is set
+# The black-box tests in tests/ (Bun) against the test builds in build/test/ (scripts/test-builds.sh), made with
+# $XCODE when it is set
 test *args:
-    scripts/build.sh --output build/test/gh-touchid --testing ${XCODE:+--xcode "$XCODE"}
+    scripts/test-builds.sh ${XCODE:+--xcode "$XCODE"}
     bun test --concurrent --timeout 30000 ./tests {{ args }}
 
 # The workflows, and the shell scripts with ShellCheck

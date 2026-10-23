@@ -6,16 +6,17 @@ from the user's sign-in to the owner's GitHub App, for one repository, revoked a
 ## Layout
 
 - `Sources/GHTouchID/`: the executable; `Access.swift` is the access policy, `GitHubApp.swift` the
-  tokens, `Usage.swift` the help text.
+  tokens, `Identity.swift` who a socket peer is, `Usage.swift` the help text.
 - `tests/`: black-box suite (Bun) against a test build; `tests/support/` has the mock GitHub.
 - `scripts/`: `build.sh` (the only place compiler flags live), `package.sh`, formula scripts.
-- `release/`: the pinned `gh` (`gh.json`), the Nix pin (`nix.json`), the Homebrew formula.
+- `release/`: the pinned `gh` (`gh.json`), the Nix pin (`nix.json`), the Homebrew formula, and
+  `known-releases` (earlier releases by cdhash; the release workflow appends, people only revoke).
 - `docs/threat-model.md`: assets, actors, boundaries. `SECURITY.md`: reporting, review checklist.
 
 ## Commands
 
 ```sh
-nix develop --command just test     # test build + suite: no Touch ID, no Keychain, mock GitHub
+nix develop --command just test     # test builds + suite (Apple silicon): no Touch ID, no Keychain, mock GitHub
 nix develop --command just lint     # actionlint + shellcheck
 nix develop --command just build    # development build in build/ (real Keychain and Touch ID)
 nix develop --command just package  # release tarball in dist/
@@ -39,6 +40,9 @@ nix develop --command just package  # release tarball in dist/
 - Comments say why, in full sentences, and stay true when the code changes.
 - Changing what a stored item holds bumps `itemFormat` (Secrets.swift) and keeps reading the
   earlier formats; add a test with an item in each format.
+- Changing what an agent request or reply means bumps `agentProtocol` (Identity.swift). An agent
+  refuses a protocol it does not speak; a client keeps speaking an older agent's protocol while that
+  release is in `release/known-releases`. Add a test against the older test build.
 
 ## Code Review Rules
 
@@ -52,6 +56,11 @@ nix develop --command just package  # release tarball in dist/
   and `runGitHubCLI`; no environment variable picks the gh in a release build.
 - Sign-ins are read, renewed and replaced under the owner's lock, and Touch ID comes before any
   secret is stored. Safe path: `currentSignIn`, `storeSignedIn`, `withSignInLock`.
+- A socket peer is trusted only as `identifyPeer` says: same user, valid code, then its cdhash or,
+  for a later release, the Developer ID requirement. Safe path: `exchange` on the client side and
+  the agent's op checks; never compare executable paths where `sharesAgentSocket` is true.
+- The agent's socket path changes only under `agent.lock`, and an agent deletes only the socket it
+  bound. Safe path: `withAgentLock` and `FileNode` in `runAgent` and `finish`.
 
 ## More detail
 

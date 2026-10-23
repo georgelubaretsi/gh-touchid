@@ -384,6 +384,10 @@ gh-touchid looks past shells that only run a command or a script (`sh -c …`, `
 started them. So a harness that runs `sh -c 'gh-touchid session'` registers itself. An interactive shell registers
 itself.
 
+Once registered, `session` warns on stderr, without changing its exit status, for each owner of those repositories
+whose Git does not ask this gh-touchid alone, and when the `gh` first on PATH is not gh-touchid's wrapper: the same
+lines, and fixes, as `status`, after `Warning: `.
+
 The session is *pending* until its first GitHub use. Then one Touch ID window asks to let the program use those
 repositories until it quits, and open issues in your other repositories. It names the program's folder and when it
 started. From then on, the program and everything it starts get tokens for those repositories without Touch ID,
@@ -429,8 +433,10 @@ gh-touchid lock      # ends every session approval and elevation now
 `status` shows:
 
 - stored Apps, with who is signed in to each (or the `app login` to run), and your accounts (names only);
-- for each owner, which credential helpers Git asks, with `fix: gh-touchid git setup OWNER` unless it is this
-  gh-touchid alone;
+- for each owner, which credential helpers Git asks, with the fix unless it is this gh-touchid alone. That is
+  `fix: gh-touchid git setup OWNER`, except when a setting Git reads after the global file (the repository's own
+  `.git/config`, its worktree file, or `GIT_CONFIG_PARAMETERS`) overrides it: then the file and the command that
+  removes the setting, such as `git config --local --unset-all credential.helper (set in ~/src/app/.git/config)`;
 - which `gh` comes first on PATH: gh-touchid's wrapper, another `gh`, or none. Unless it is the wrapper, it prints the
   PATH line for this installation and the alias. For Homebrew that is the `opt` folder, which stays the same across
   updates;
@@ -440,8 +446,10 @@ gh-touchid lock      # ends every session approval and elevation now
   gh's Keychain item `gh:github.com`, by its attributes, never its secret;
 - sessions (pending or approved, program, folder, start time, repositories) and elevations.
 
-Sessions and elevations live in a small background agent that `session` or `elevate` starts. It exits when nothing is
-left. Logging out or restarting ends everything too. (See [Security model](#sessions-and-the-background-agent).)
+Sessions and elevations live in a small background agent that `session` or `elevate` starts. Every release you have
+installed shares one agent. After an upgrade the old release's agent keeps serving, so running sessions stay approved;
+it exits when nothing is left, and the next use starts the new release's. Logging out or restarting ends everything
+too. (See [Security model](#sessions-and-the-background-agent).)
 
 Every use, granted or refused, is logged to `~/Library/Logs/gh-touchid/access.log` with the chain of processes that
 asked:
@@ -618,9 +626,18 @@ gh-touchid runs only the `gh` it was built with. No environment variable changes
   the repositories they need.
 - The background agent holds no tokens or keys. It answers only processes running as you, on a socket in your
   private temporary directory (`getconf DARWIN_USER_TEMP_DIR`).
-- The agent trusts only the gh-touchid executable it was started from: only that executable may approve a session or
-  elevate a repository. gh-touchid ignores an agent socket served by any other program. Each gh-touchid executable
-  path has its own agent.
+- gh-touchid and the agent check each other on every connection by what the kernel says of the running code, not by
+  its file path: a valid signature, the hardened runtime, and its cdhash. They trust the same release, an earlier one
+  on the list built into this release (`release/known-releases`, which the release workflow adds each release to),
+  and a later one with gh-touchid's Developer ID signature that says it is later. Only those may approve a session,
+  elevate a repository, or have their answers acted on. The kernel keeps a running program's cdhash after an upgrade
+  deletes its file, so an older release's agent is still recognized.
+- A release marked `revoked` in that list is not trusted. The first gh-touchid that meets its agent ends it (`lock`),
+  and nothing it held is carried over: each program runs `gh-touchid session` again, and until then each use asks.
+- An agent that gh-touchid cannot verify is left alone: another program on its socket, or a later release whose file
+  an upgrade already deleted. No session applies, so each use asks for Touch ID, and `status` names that program.
+- Releases share one agent, at `agent.sock`. Development builds, and builds from source without the release list,
+  keep an agent of their own, at a socket named after their path, and trust a program at their own path, as before.
 - Any process running as you can register its parent (or the program above its non-interactive shells) as a pending
   session, which still needs your Touch ID. It can also see the status, or `lock`.
 
@@ -639,6 +656,13 @@ build or a build from source (ad hoc signed, without the hardened runtime; a rel
 or answer the Keychain dialogs.
 
 ## Upgrading
+
+### From 0.4.0 or 0.4.1
+
+Nothing to do. Sessions approved before the upgrade keep working: the newer release asks the old release's agent about
+them, and `status` and `lock` include it. A session that was still pending (never used yet) is not carried over; run
+`gh-touchid session` in it again. From then on, upgrades keep sessions approved as described under
+[Status, lock and the access log](#status-lock-and-the-access-log).
 
 ### From 0.3.1 or earlier to 0.4
 
@@ -702,7 +726,8 @@ refuse any other version.
 
 A development build runs `GH_TOUCHID_GH` or the `gh` on PATH, unchecked. It keeps its own Keychain items
 (`com.lubaretsi.gh-touchid.dev.*`), so trying one never reads or replaces an installed gh-touchid's Apps, sign-ins
-and tokens. It needs an App of its own, with a name of its own:
+and tokens. It keeps its own background agent too, which a rebuilt binary at the same path goes on using. It needs an
+App of its own, with a name of its own:
 
 ```sh
 build/gh-touchid app create acme --name acme-dev
@@ -734,10 +759,12 @@ published. The tap runs `brew test-bot` on changes made there.
 
 ### Tests
 
-`just test` builds a test build. It keeps its state in `GH_TOUCHID_TEST_DIR`, talks to a mock GitHub at
-`GH_TOUCHID_API_URL`, prints `AUTH:` and `OPEN:` lines instead of showing Touch ID or a browser, and runs a fake
-`gh`. Then `bun test` runs the suite in `tests/` against it. The check workflow runs `just test` and `just lint` on
-every pull request and push to main. The release workflow runs `just test` before packaging.
+`just test` builds the test builds (`scripts/test-builds.sh`): the current sources, an older version and one that marks
+it revoked, and v0.4.1 from its tag, which is built once and kept. They keep their state in `GH_TOUCHID_TEST_DIR`, talk
+to a mock GitHub at `GH_TOUCHID_API_URL`, print `AUTH:` and `OPEN:` lines instead of showing Touch ID or a browser,
+and run a fake `gh`. Then `bun test` runs the suite in `tests/` against them. The tests need Apple silicon. The check
+workflow runs `just test` and `just lint` on every pull request and push to main. The release workflow runs
+`just test` before packaging.
 
 ### Nix from source
 

@@ -5,7 +5,8 @@ import Foundation
 // 1. Acting as one of your accounts (`as <login>`, GH_TOUCHID_AS=<login>): Touch ID for every use, sessions or not,
 //    then that account's token.
 // 2. R's owner has no App stored, or you are not signed in to it: refused before any dialog.
-// 3. Inside an approved session that lists R: a token for R, acting as you through the App, without Touch ID.
+// 3. Inside an approved session that lists R: a token for R, acting as you through the App, without Touch ID. The
+//    session may be held by the agent or, in builds that share agent.sock, by an agent of 0.4.0/0.4.1.
 // 4. Inside an approved session that does not list R: an issue-only token; for a public R, Touch ID for this use
 //    first, and nothing for Git.
 // 5. Inside a pending session: one Touch ID approves the session, then as 3 or 4.
@@ -24,7 +25,7 @@ struct GitHubCredential {
     let app: AppCredentials?
 }
 
-/// A session as the daemon reports it.
+/// A session as an agent reports it.
 struct SessionInfo {
     let id: String
     let pid: Int
@@ -34,6 +35,8 @@ struct SessionInfo {
     let started: Date
     let approved: Bool
     let approving: Bool
+    /// The agent of 0.4.0/0.4.1 that holds the session; nil for the agent's own.
+    var legacy: LegacyAgent?
 
     init?(_ message: Any?) {
         guard let message = message as? [String: Any],
@@ -128,12 +131,20 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
         try checkFormat(.app(owner: owner))
         try checkFormat(.signIn(owner: owner))
 
+        // an approved session that lists the repository decides, whichever agent holds it; otherwise the agent's
         let reply = agentRequest(["op": "check", "repo": repository])
-        if let session = SessionInfo(reply?["session"]) {
+        let current = SessionInfo(reply?["session"])
+        let covers = reply?["covers"] as? Bool == true
+        if let current, current.approved, covers {
+            return authorized(.app(session: current))
+        }
+        if let legacy = legacyApprovedSession(covering: repository) {
+            return authorized(.app(session: legacy))
+        }
+        if let session = current {
             if !session.approved {
                 try awaitApproval(of: session)
             }
-            let covers = reply?["covers"] as? Bool == true
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
         fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
@@ -165,9 +176,9 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
                 throw ToolError.missingRepository
             }
             // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
-            let elevated = agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true
+            let elevated = isElevated(repository, session: session)
             let token = try mintScopedToken(repository: repository, scope: .repository(includeWorkflows: elevated))
-            let grant = session.map { "session \($0.label)" } ?? "once"
+            let grant = session.map { "session \($0.label)\($0.legacy.map { " of \($0.marker)" } ?? "")" } ?? "once"
             appendAccessLog(
                 "granted \(repository) (\(grant))\(elevated ? ", elevated" : "") as \(token.login) to \(chain)"
             )

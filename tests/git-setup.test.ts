@@ -1,8 +1,8 @@
 // `git setup <owner>` in the test's own global Git configuration (HOME and GIT_CONFIG_GLOBAL inside its folder, never
-// the user's ~/.gitconfig), and what `status` says of Git afterwards.
+// the user's ~/.gitconfig), what `status` says of Git afterwards, and what `session` warns of.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { binary, TestEnv } from "./support/harness";
@@ -124,5 +124,116 @@ describe("status of Git", () => {
     expect((await env.run(["status"])).stdout).toMatch(
       /^Git for acme asks: osxkeychain, this gh-touchid; fix: gh-touchid git setup acme$/m,
     );
+  });
+
+  test("a global helper after the section: both named, and the git setup fix", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    expect((await env.run(["git", "setup", "acme"])).status).toBe(0);
+    await git(env, "config", "--global", "--add", "credential.helper", "osxkeychain");
+    expect((await env.run(["status"])).stdout).toMatch(
+      /^Git for acme asks: this gh-touchid, osxkeychain; fix: gh-touchid git setup acme$/m,
+    );
+  });
+
+  test("overridden in the repository's own configuration: its file and the command that removes it", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    expect((await env.run(["git", "setup", "acme"])).status).toBe(0);
+    const repository = env.makeRepository("acme/widgets");
+    const old = expectedHelper().replace(/ git credential$/, " git-credential");
+    await git(env, "-C", repository, "config", "--local", "--add", "credential.helper", "");
+    await git(env, "-C", repository, "config", "--local", "--add", "credential.helper", old);
+
+    const status = await env.run(["status"], { cwd: repository });
+    expect(status.status).toBe(0);
+    const line = status.stdout.split("\n").find((text) => text.startsWith("Git for acme"));
+    expect(line).toBe(
+      "Git for acme asks: another gh-touchid; fix: git config --local --unset-all credential.helper "
+        + `(set in ${repository}/.git/config)`,
+    );
+    // outside the repository Git is as git setup left it
+    expect((await env.run(["status"])).stdout).toMatch(/^Git for acme asks: this gh-touchid only$/m);
+
+    // the command as printed fixes it
+    const command = /fix: (git config [^(]+) \(set in /.exec(line!)![1].split(" ");
+    const removed = await env.exec([join(env.dir, "bin", "git"), ...command.slice(1)], { cwd: repository });
+    expect(removed.status).toBe(0);
+    expect((await env.run(["status"], { cwd: repository })).stdout).toMatch(
+      /^Git for acme asks: this gh-touchid only$/m,
+    );
+  });
+
+  test("overridden in the repository with Git not set up: the repository's fix, then git setup", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const repository = env.makeRepository("acme/widgets");
+    await git(env, "-C", repository, "config", "--local", "credential.helper", "osxkeychain");
+    expect((await env.run(["status"], { cwd: repository })).stdout).toContain(
+      "Git for acme asks: osxkeychain; fix: git config --local --unset-all credential.helper "
+        + `(set in ${repository}/.git/config), then gh-touchid git setup acme\n`,
+    );
+  });
+});
+
+describe("session warnings", () => {
+  /**
+   * A copy of the test build laid out as a release installs it: bin/gh-touchid and the gh wrapper libexec/bin/gh,
+   * with Git set up for acme by that copy. PATH has the wrapper's folder first unless `foreignGh`, which puts the
+   * fake gh's folder before it.
+   */
+  async function install(env: TestEnv, options: { foreignGh?: boolean } = {}) {
+    const root = join(env.dir, "inst");
+    const installed = join(root, "bin", "gh-touchid");
+    const wrapperFolder = join(root, "libexec", "bin");
+    mkdirSync(join(root, "bin"), { recursive: true });
+    mkdirSync(wrapperFolder, { recursive: true });
+    copyFileSync(binary, installed);
+    chmodSync(installed, 0o755);
+    writeFileSync(join(wrapperFolder, "gh"), `#!/bin/sh\nexec '${installed}' gh "$@"\n`);
+    chmodSync(join(wrapperFolder, "gh"), 0o755);
+    const folders = [wrapperFolder, join(root, "bin"), join(env.dir, "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+    const path = (options.foreignGh ? [join(env.dir, "fake"), ...folders] : folders).join(":");
+    const run = (args: string[]) => env.exec([installed, ...args], { env: { PATH: path } });
+    expect((await run(["git", "setup", "acme"])).status).toBe(0);
+    return { run, wrapperFolder };
+  }
+
+  function warnings(stderr: string): string[] {
+    return stderr.split("\n").filter((line) => line.startsWith("Warning: "));
+  }
+
+  test("none when Git asks this gh-touchid only and gh on PATH is its wrapper", async () => {
+    await using env = await TestEnv.create();
+    const { run } = await install(env);
+    const result = await run(["session", "--repo", "acme/widgets"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("for acme/widgets: pending");
+    expect(warnings(result.stderr)).toEqual([]);
+  });
+
+  test("an owner whose Git asks another helper: what it asks and the fix; the session still registers", async () => {
+    await using env = await TestEnv.create();
+    const { run } = await install(env);
+    await git(env, "config", "--global", "--add", "credential.helper", "osxkeychain");
+    const result = await run(["session", "--repo", "acme/widgets", "--repo", "acme/gadgets"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("pending");
+    expect(warnings(result.stderr)).toEqual([
+      "Warning: Git for acme asks: this gh-touchid, osxkeychain; fix: gh-touchid git setup acme",
+    ]);
+  });
+
+  test("another gh first on PATH: which one and the fix", async () => {
+    await using env = await TestEnv.create();
+    const { run, wrapperFolder } = await install(env, { foreignGh: true });
+    const result = await run(["session", "--repo", "acme/widgets"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("pending");
+    expect(warnings(result.stderr)).toEqual([
+      `Warning: gh on PATH: ${join(env.dir, "fake", "gh")}, another gh; `
+        + `fix: add \`export PATH="${wrapperFolder}:$PATH"\` to your shell's profile, `
+        + "or `alias gh='gh-touchid gh'` for your own shell only",
+    ]);
   });
 });

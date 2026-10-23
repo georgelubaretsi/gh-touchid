@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Approved sessions survive upgrades. Every release you have installed shares one background agent (`agent.sock`);
+  after an upgrade the old release's agent keeps serving until its sessions end. Sessions approved under 0.4.0 or
+  0.4.1 keep working too, and `status` and `lock` include their agent.
+- `release/known-releases`: the releases a release trusts, by cdhash; one marked `revoked` is no longer trusted, and
+  the first gh-touchid that meets its agent locks it, carrying nothing over: its sessions need `gh-touchid session`
+  again.
+- `session` warns on stderr, once registered, for each owner of its repositories whose Git does not ask this
+  gh-touchid alone, and when the `gh` first on PATH is not gh-touchid's wrapper, with the same fixes as `status`.
+
+### Changed
+
+- gh-touchid and its agent trust each other by the kernel's view of the running code (valid signature, hardened
+  runtime, cdhash, or gh-touchid's Developer ID for a later release), not by the executable's path. An agent it cannot
+  verify is left alone, each use asks for Touch ID, and `status` names the program holding the socket.
+- Agent requests and replies carry a protocol version; a protocol the agent does not speak is refused before anything
+  is done.
+
+### Fixed
+
+- `status` no longer advises `gh-touchid git setup OWNER` when the credential helpers are overridden in the
+  repository's own configuration (or its worktree file, or the environment), which `git setup` cannot change: it
+  names the file and the command that removes the setting, such as `git config --local --unset-all credential.helper`.
+- Two agents starting at once could delete each other's socket; starting and stopping now take `agent.lock`, and an
+  agent deletes only the socket it made.
+
 ## [0.4.1] - 2026-10-23
 
 ### Added

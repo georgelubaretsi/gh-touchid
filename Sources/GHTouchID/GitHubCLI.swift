@@ -292,14 +292,6 @@ private func waitForExit(_ pid: pid_t) -> Int32 {
     return signal == 0 ? (status >> 8) & 0xFF : 128 + signal
 }
 
-@_silgen_name("csops")
-private func csops(_ pid: pid_t, _ operation: UInt32, _ buffer: UnsafeMutableRawPointer?, _ size: Int) -> Int32
-
-// From xnu's <sys/codesign.h>, which the macOS SDK does not ship.
-private let csOpsStatus: UInt32 = 0
-private let csOpsCDHash: UInt32 = 5
-private let csValid: UInt32 = 0x1
-
 /// The cdhash of the code the kernel loaded for the process `pid` (the slice that runs), as long as its signature is
 /// valid; nil when either cannot be read.
 private func loadedCodeDirectoryHash(_ pid: pid_t) -> String? {

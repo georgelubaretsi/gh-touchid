@@ -8,7 +8,7 @@ func executablePath(_ pid: pid_t) -> String? {
     return length > 0 ? String(cString: buffer) : nil
 }
 
-/// This program's own executable; daemon and clients trust each other only when theirs are the same.
+/// This program's own executable.
 let ownExecutablePath: String? = executablePath(getpid())
 
 /// `path` with every symlink resolved, or nil when it does not exist.

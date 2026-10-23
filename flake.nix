@@ -44,6 +44,8 @@
 
           dontConfigure = true;
 
+          # Deliberately no release list (--known-releases): this build is ad hoc signed, so it keeps a background
+          # program of its own instead of sharing the releases' one.
           buildPhase = ''
             runHook preBuild
             export HOME="$TMPDIR"

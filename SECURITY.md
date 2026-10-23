@@ -21,7 +21,8 @@ parts the change touches:
 | `SignIn.swift`, `LocalServer.swift`, `AppManifest.swift` | callbacks need this attempt's `state`; PKCE is sent and checked; Touch ID comes before anything is stored; failures say truthfully what was stored; the manifest page is not served after an App was made |
 | `GitHubCLI.swift` | only the pinned gh runs with a token (SHA-256, and cdhash before it runs); `GH_TOKEN` goes only to it, with a fresh `GH_CONFIG_DIR`; token-revealing commands stay refused; signals are passed on and the token is still revoked |
 | `Commands.swift` (`git credential`) | a credential goes only to Git's HTTP(S) transport and never to a terminal |
-| `Agent.swift`, `Socket.swift` | same-user peers only; approving and elevating only from this executable; clients trust only an agent served by their own executable; the agent holds no secrets |
+| `Identity.swift` | a peer is trusted by the kernel's view of its code (audit token, valid signature, hardened runtime, cdhash, or the Developer ID requirement for a later release), never by its path where releases share `agent.sock`; revoked releases are not trusted |
+| `Agent.swift`, `AgentClient.swift`, `Socket.swift` | same-user peers only; approving, denying and elevating only for a trusted peer; a session is registered only by a process inside it; clients act only on a trusted agent's replies; a protocol not spoken is refused before anything is done; the socket path changes only under `agent.lock`; the agent holds no secrets |
 | `Secrets.swift` | checks before a dialog read attributes only; development builds keep their own items; nothing secret is written outside the Keychain (test builds excepted) |
 | `Repository.swift`, `GitHubFlags.swift` | the repository in the dialog is the one the token is for; for an account's token, ambiguity is refused, not guessed |
 | Anything that prints, logs or builds an error | no token, client secret or refresh token can end up in it |
