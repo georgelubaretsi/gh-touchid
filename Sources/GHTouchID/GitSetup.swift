@@ -1,18 +1,18 @@
 import Darwin
 import Foundation
 
-// `git-setup <owner>`: Git's HTTPS credential requests for an owner's repositories go to this gh-touchid alone,
+// `git setup <owner>`: Git's HTTPS credential requests for an owner's repositories go to this gh-touchid alone,
 // through three entries in the global Git configuration:
 //
 //   [credential "https://github.com/OWNER"]
 //       helper =
-//       helper = !/opt/homebrew/bin/gh-touchid git-credential
+//       helper = !/opt/homebrew/bin/gh-touchid git credential
 //       useHttpPath = true
 //
 // Git asks every helper of every matching section, in the order it reads them, and an empty helper drops those before
 // it; so the section goes last in the file, after any broader one such as `credential.https://github.com.helper`.
 
-/// `git-setup <owner>`. The owner is kept as typed: Git compares the path of a URL case-sensitively, so it must be
+/// `git setup <owner>`. The owner is kept as typed: Git compares the path of a URL case-sensitively, so it must be
 /// written as in the remotes' URLs.
 func gitSetup(_ arguments: [String]) throws -> Int32 {
     guard arguments.count == 1, validOwner(arguments[0]) != nil else {
@@ -22,13 +22,13 @@ func gitSetup(_ arguments: [String]) throws -> Int32 {
     return 0
 }
 
-/// Writes the owner's entries, replacing those of an earlier run, and prints them.
+/// Writes the owner's entries, replacing those of an earlier run (whatever helper they named), and prints them.
 func setUpGit(owner: String) throws {
     guard let target = gitCredentialExecutable() else {
         throw ToolError.input("cannot find gh-touchid's own executable")
     }
     let section = "credential.https://github.com/\(owner)"
-    let helper = "!\(shellQuoted(target.path)) git-credential"
+    let helper = "!\(shellQuoted(target.path)) git credential"
 
     // Other settings of the section stay; the helpers and useHttpPath are gh-touchid's. Removing the section and
     // adding it again moves it to the end of the file.
@@ -56,7 +56,7 @@ func setUpGit(owner: String) throws {
     print("which repository Git is talking to. Use HTTPS remotes: https://github.com/\(owner)/REPO.git")
     if target.changesOnUpdate {
         print(
-            "\(target.path) changes when gh-touchid is updated: run `gh-touchid git-setup \(owner)` again after "
+            "\(target.path) changes when gh-touchid is updated: run `gh-touchid git setup \(owner)` again after "
                 + "each update, or put a gh-touchid link that stays (such as Homebrew's bin or your Nix profile's) "
                 + "on PATH and run it from there."
         )
@@ -75,7 +75,7 @@ func setUpGit(owner: String) throws {
 /// The end of `app create` and `app set`: in a terminal, asks whether to set up Git for the owner now and does;
 /// without one, prints the command.
 func offerGitSetup(owner: String) throws {
-    let command = "gh-touchid git-setup \(owner)"
+    let command = "gh-touchid git setup \(owner)"
     guard isatty(STDERR_FILENO) != 0, let answer = askInTerminal("Set up Git for \(owner) now? [Y/n] ") else {
         fputs("To have Git use gh-touchid for \(owner)'s repositories, run: \(command)\n", stderr)
         return
@@ -137,7 +137,7 @@ func gitStatus(owners: [String]) -> [String] {
         }
         lines.append(
             "Git for \(owner) asks: \(asked.isEmpty ? "no credential helper" : asked.joined(separator: ", ")); "
-                + "fix: gh-touchid git-setup \(owner)"
+                + "fix: gh-touchid git setup \(owner)"
         )
     }
     return lines + gitHubCLIStatus()
@@ -409,10 +409,11 @@ func credentialHelpers(for url: String) -> [String]? {
     return helpers
 }
 
-/// Whether `helper` is `!<path> git-credential` with a path, or a name found on PATH, that resolves to this executable.
+/// Whether `helper` is `!<path> git credential` with a path, or a name found on PATH, that resolves to this
+/// executable. The `!<path> git-credential` of gh-touchid 0.3 is not: that command is gone.
 func runsThisGitCredential(_ helper: String) -> Bool {
-    guard helper.hasPrefix("!"), let own = ownRealExecutablePath,
-          let words = shellWords(helper.dropFirst()), words.count == 2, words[1] == "git-credential" else {
+    guard helper.hasPrefix("!"), let own = ownRealExecutablePath, let words = shellWords(helper.dropFirst()),
+          words.count == 3, words[1] == "git", words[2] == "credential" else {
         return false
     }
     let path = words[0].contains("/") ? words[0] : commandsOnPath(words[0]).first

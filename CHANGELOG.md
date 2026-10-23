@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `status` says for each owner's App who is signed in to it, or the `app login` to run.
 - A test suite (`just test`): a test build against a mock GitHub, run on every pull request and push to main, and
   before each release.
+- `gh-touchid help <command>` and `gh-touchid <command> --help` print one command's usage; a wrong use of a
+  command prints that command's usage instead of every command's.
+- `as <login> -- <command>`: a `--` before the command is accepted, and optional.
 
 ### Changed
 
@@ -37,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dialogs name who a use acts as: you, via the App.
 - Development builds (`just build`) keep their own Keychain items (`com.lubaretsi.gh-touchid.dev.*`), so trying one
   never reads or replaces an installed gh-touchid's Apps, sign-ins and tokens.
+- **Breaking:** `user add` and `user remove` are now `account add` and `account remove`.
+- **Breaking:** `git-setup <owner>` is now `git setup <owner>`, and the credential helper `git-credential` is now
+  `git credential`. Run `gh-touchid git setup <owner>` again for each owner: it replaces the old helper entry, which
+  no longer works.
+- `app create` names a new App `<owner>-touchid` (was `<owner>-agent`), so it does not clash with an App made by
+  0.3.1 and earlier.
 
 ### Removed
 

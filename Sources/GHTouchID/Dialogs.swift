@@ -207,7 +207,7 @@ extension Prompt {
         )
     }
 
-    /// `user add`.
+    /// `account add`.
     static func accountToken(_ login: String) -> Prompt {
         Prompt(
             rows: [

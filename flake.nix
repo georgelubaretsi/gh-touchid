@@ -56,7 +56,7 @@
             runHook postBuild
           '';
 
-          # bin/gh-touchid is the executable itself, so that `git-setup` finds it on PATH; libexec/bin/gh runs gh
+          # bin/gh-touchid is the executable itself, so that `git setup` finds it on PATH; libexec/bin/gh runs gh
           # through it, for those who put libexec/bin on PATH or take `with-gh`.
           installPhase = ''
             runHook preInstall

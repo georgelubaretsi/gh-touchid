@@ -120,11 +120,11 @@ func renderPrompts(into directory: String) throws -> Int32 {
             repository: "octo-org/octo-repo"
         )),
         ("account-no-repository", .acting(as: "mona", by: agent, use: ghUse(["api", "user"]), repository: nil)),
-        ("app-create", .newApp("acme-agent", owner: "acme")),
-        ("app-create-sign-in", .signIn("octocat", owner: "acme", app: "acme-agent", storesApp: true)),
+        ("app-create", .newApp("acme-touchid", owner: "acme")),
+        ("app-create-sign-in", .signIn("octocat", owner: "acme", app: "acme-touchid", storesApp: true)),
         ("app-set", .signIn("octocat", owner: "acme", app: nil, storesApp: true)),
-        ("app-login", .signIn("octocat", owner: "acme", app: "acme-agent", storesApp: false)),
-        ("user-add", .accountToken("octocat")),
+        ("app-login", .signIn("octocat", owner: "acme", app: "acme-touchid", storesApp: false)),
+        ("account-add", .accountToken("octocat")),
     ]
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     return try MainActor.assumeIsolated {

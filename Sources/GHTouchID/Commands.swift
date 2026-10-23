@@ -13,10 +13,34 @@ func run() throws -> Int32 {
     }
     let rest = Array(arguments.dropFirst())
 
-    switch command {
-    case "help", "--help", "-h":
-        print(ToolError.usageText)
+    if ["help", "--help", "-h"].contains(command) {
+        guard rest.count <= 1 else {
+            throw ToolError.usage
+        }
+        guard let name = rest.first else {
+            print(Usage.all)
+            return 0
+        }
+        guard let text = Usage.of(name) else {
+            throw ToolError.usage
+        }
+        print(text)
         return 0
+    }
+    // `<command> --help`; everything after `gh` is GitHub CLI's, its `--help` included
+    if command != "gh", let first = rest.first, ["--help", "-h"].contains(first), let text = Usage.of(command) {
+        print(text)
+        return 0
+    }
+    do {
+        return try dispatch(command, rest)
+    } catch ToolError.usage where Usage.of(command) != nil {
+        throw ToolError.commandUsage(command)
+    }
+}
+
+private func dispatch(_ command: String, _ rest: [String]) throws -> Int32 {
+    switch command {
     case "version", "--version":
         guard rest.isEmpty else {
             throw ToolError.usage
@@ -25,14 +49,12 @@ func run() throws -> Int32 {
         return 0
     case "app":
         return try appCommand(rest)
-    case "user":
-        return try userCommand(rest)
+    case "account":
+        return try accountCommand(rest)
     case "gh":
         return try runGitHub(rest, account: actingAccount())
-    case "git-setup":
-        return try gitSetup(rest)
-    case "git-credential":
-        return try gitCredential(rest)
+    case "git":
+        return try gitCommand(rest)
     case "as":
         return try runAs(rest)
     case "session":
@@ -61,6 +83,18 @@ func run() throws -> Int32 {
     }
 }
 
+/// `git setup <owner>` or `git credential <get|store|erase>`.
+private func gitCommand(_ arguments: [String]) throws -> Int32 {
+    switch arguments.first {
+    case "setup":
+        return try gitSetup(Array(arguments.dropFirst()))
+    case "credential":
+        return try gitCredential(Array(arguments.dropFirst()))
+    default:
+        throw ToolError.usage
+    }
+}
+
 /// `app create <owner> [--name <name>] [--no-open]`, `app set <owner> --client-id <id> [--no-open]` with the client
 /// secret on stdin (or typed, hidden), or `app login <owner> [--no-open]`.
 private func appCommand(_ arguments: [String]) throws -> Int32 {
@@ -72,7 +106,7 @@ private func appCommand(_ arguments: [String]) throws -> Int32 {
     options.removeAll { $0 == "--no-open" }
     switch arguments[0] {
     case "create":
-        let names = try parseOptions(options, allowed: ["--name"])["--name"] ?? ["\(owner)-agent"]
+        let names = try parseOptions(options, allowed: ["--name"])["--name"] ?? ["\(owner)-touchid"]
         guard names.count == 1, let name = names.first, !name.isEmpty, printable(name, limit: 100) == name else {
             throw ToolError.input("--name takes one App name")
         }
