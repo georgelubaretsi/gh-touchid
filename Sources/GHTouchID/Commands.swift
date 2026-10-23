@@ -70,7 +70,7 @@ private func dispatch(_ command: String, _ rest: [String]) throws -> Int32 {
         guard rest.isEmpty else {
             throw ToolError.usage
         }
-        let locked = agentRequest(["op": "lock"]) != nil
+        let locked = lockAgents()
         print(locked ? "Locked: every session approval and elevation has ended." : "Nothing was active.")
         return 0
     case "agent":
@@ -308,6 +308,10 @@ private func registerSession(_ arguments: [String]) throws -> Int32 {
             + "\(session.repositories.joined(separator: ", ")): \(state).\n",
         stderr
     )
+    // The session only helps the programs whose Git and gh come here; say so now rather than at their first use.
+    for warning in sessionWarnings(repositories: session.repositories) {
+        fputs("Warning: \(warning)\n", stderr)
+    }
     return 0
 }
 
@@ -348,9 +352,10 @@ private func showStatus() throws -> Int32 {
     print("Apps (owners): \(apps.isEmpty ? "none" : apps.joined(separator: ", "))")
     print("Accounts: \(accounts.isEmpty ? "none" : accounts.joined(separator: ", "))")
     gitStatus(owners: owners).forEach { print($0) }
-    let reply = agentRequest(["op": "status"])
-    let sessions = (reply?["sessions"] as? [Any] ?? []).compactMap(SessionInfo.init)
-    let elevations = reply?["elevations"] as? [[String: Any]] ?? []
+    let (sessions, elevations) = agentStatus()
+    if let agentProblem {
+        print("Agent: \(agentProblem).")
+    }
     if sessions.isEmpty && elevations.isEmpty {
         print("No sessions or elevations.")
         return 0
@@ -359,18 +364,19 @@ private func showStatus() throws -> Int32 {
         print("Sessions:")
         for session in sessions {
             let state = session.approved ? "approved" : "pending "
+            let holder = session.legacy.map { " (\($0.marker))" } ?? ""
             print(
                 "  \(state)  \(session.label) in \(displayFolder(session.folder)) "
-                    + "(started \(clockTime(session.started))): \(session.repositories.joined(separator: ", "))"
+                    + "(started \(clockTime(session.started))): "
+                    + "\(session.repositories.joined(separator: ", "))\(holder)"
             )
         }
     }
     if !elevations.isEmpty {
         print("Elevated (tokens include workflows):")
         for elevation in elevations {
-            let repository = elevation["repo"] as? String ?? "?"
-            let until = Date(timeIntervalSince1970: elevation["until"] as? Double ?? 0)
-            print("  \(repository)  until \(localTime(until))")
+            let holder = elevation.legacy.map { " (\($0.marker))" } ?? ""
+            print("  \(elevation.repository)  until \(localTime(elevation.until))\(holder)")
         }
     }
     return 0

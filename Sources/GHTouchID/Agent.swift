@@ -9,8 +9,11 @@ import Foundation
 // only answers which session decides a caller's request and whether a repository is elevated. Sessions nest: an
 // inner session never shadows an outer one that lists the repository asked for.
 //
-// `register`, `check`, `status` and `lock` are answered for any peer running as this user; `begin-approval`,
-// `approve`, `deny` and `elevate` only for a peer running this very executable.
+// Every request and reply carries the protocol (`agentProtocol`) and the sender's version; a request in another
+// protocol, or none, is refused and nothing is done. `register`, `check`, `status` and `lock` are answered for any
+// peer running as this user; `begin-approval`, `approve`, `deny` and `elevate` only for a gh-touchid this one trusts
+// (`identifyPeer`): this very executable, an earlier release on the built-in list, or a newer release. A session is
+// only ever registered by a process inside it (`register` takes the caller's own session root).
 
 /// How long one client may hold the approval dialog of a session before another may show it.
 let approvalWindow: TimeInterval = touchIDTimeout
@@ -48,12 +51,13 @@ private final class SessionAgent: @unchecked Sendable {
     private var elevations: [String: Date] = [:]
     private var sources: [DispatchSourceProtocol] = []
     private let listener: Int32
-    private let executable: String
+    /// The socket this agent bound, which it removes as it stops only while it is still the one at its path.
+    private let socketNode: FileNode
     private let started = Date()
 
-    init(listener: Int32, executable: String) {
+    init(listener: Int32, socketNode: FileNode) {
         self.listener = listener
-        self.executable = executable
+        self.socketNode = socketNode
     }
 
     func start() {
@@ -94,41 +98,52 @@ private final class SessionAgent: @unchecked Sendable {
         guard let line = readMessage(client),
               let request = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let operation = request["op"] as? String else {
-            _ = sendMessage(client, ["error": "bad request"])
+            reply(client, ["error": "bad request"])
+            return
+        }
+        guard request["protocol"] as? Int == agentProtocol else {
+            appendAccessLog("refused \(printable(operation, limit: 40)) to \(who): not protocol \(agentProtocol)")
+            reply(client, ["error": "protocol"])
             return
         }
 
-        let reply: [String: Any]
+        let answer: [String: Any]
         switch operation {
         case "register":
-            reply = register(request, peer: peer, who: who)
+            answer = register(request, peer: peer, who: who)
         case "check":
-            reply = check(request, peer: peer)
+            answer = check(request, peer: peer)
         case "status":
-            reply = status()
+            answer = status()
         case "lock":
-            _ = sendMessage(client, ["ok": true])
+            reply(client, ["ok": true])
             finish("locked by \(who)")
         case "begin-approval", "approve", "deny", "elevate":
-            guard executablePath(peer) == executable else {
-                appendAccessLog("refused \(operation) to \(who): not this gh-touchid executable")
-                reply = ["error": "only \(executable) may \(operation)"]
+            let identity = identifyPeer(client, statedVersion: request["version"])
+            guard identity.isTrusted else {
+                appendAccessLog("refused \(operation) to \(who): not a gh-touchid this one trusts (\(identity.reason))")
+                answer = ["error": "only a gh-touchid this agent trusts may \(operation)"]
                 break
             }
             switch operation {
             case "begin-approval":
-                reply = beginApproval(request, peer: peer)
+                answer = beginApproval(request, peer: peer)
             case "approve":
-                reply = approve(request, peer: peer, who: who)
+                answer = approve(request, peer: peer, who: who)
             case "deny":
-                reply = deny(request, peer: peer)
+                answer = deny(request, peer: peer)
             default:
-                reply = elevate(request, who: who)
+                answer = elevate(request, who: who)
             }
         default:
-            reply = ["error": "unknown request"]
+            answer = ["error": "unknown request"]
         }
-        _ = sendMessage(client, reply)
+        reply(client, answer)
+    }
+
+    /// Sends `message` with the protocol and version every reply carries.
+    private func reply(_ client: Int32, _ message: [String: Any]) {
+        _ = sendMessage(client, message.merging(["protocol": agentProtocol, "version": toolVersion]) { _, new in new })
     }
 
     private func register(_ request: [String: Any], peer: pid_t, who: String) -> [String: Any] {
@@ -292,9 +307,15 @@ private final class SessionAgent: @unchecked Sendable {
         }
     }
 
+    /// Stops for good, removing the socket under the lock only while it is still the one this agent bound: another
+    /// agent may have taken the path since.
     private func finish(_ reason: String) -> Never {
         appendAccessLog("agent stopped: \(reason)")
-        unlink(agentSocketPath)
+        _ = withAgentLock {
+            if FileNode(path: agentSocketPath) == socketNode {
+                unlink(agentSocketPath)
+            }
+        }
         exit(0)
     }
 }
@@ -315,77 +336,50 @@ private func folder(_ value: Any?) -> String {
     return path
 }
 
-func runAgent() throws -> Never {
-    guard let executable = ownExecutablePath else {
-        throw ToolError.agent("cannot find gh-touchid's own executable")
+/// Whether anything accepts a connection at `path` and answers a status request. Not verified: any program of this
+/// user that serves the socket keeps it, and clients decide whether to trust it.
+private func socketAnswers(_ path: String) -> Bool {
+    guard let fd = connectSocket(path, timeoutSeconds: 2) else {
+        return false
     }
+    defer { close(fd) }
+    return sendMessage(fd, ["op": "status", "protocol": agentProtocol, "version": toolVersion])
+        && readMessage(fd) != nil
+}
+
+func runAgent() throws -> Never {
     try ensureSessionDirectory()
-    if agentRequest(["op": "status"]) != nil {
+    // read now: an upgrade may delete this executable's file while the agent runs
+    _ = ownCodeDirectoryHashes
+    // probe, remove a stale socket and bind under the lock, so that agents starting at once never remove the socket
+    // another one has just bound
+    let bound = try withAgentLock { () throws -> (Int32, FileNode)? in
+        if socketAnswers(agentSocketPath) {
+            return nil
+        }
+        unlink(agentSocketPath)
+        var address = try socketAddress(agentSocketPath)
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listener >= 0 else {
+            throw ToolError.agent("cannot create a socket")
+        }
+        let previous = umask(0o077)
+        let status = withSocketAddress(&address) { bind(listener, $0, $1) }
+        umask(previous)
+        guard status == 0, listen(listener, 16) == 0, let node = FileNode(path: agentSocketPath) else {
+            throw ToolError.agent("cannot listen on \(agentSocketPath)")
+        }
+        return (listener, node)
+    }
+    guard let lock = bound else {
+        throw ToolError.agent("cannot lock \(agentLockPath)")
+    }
+    guard case let (listener, node)? = lock else {
         exit(0) // another agent is already serving
     }
-    unlink(agentSocketPath)
-    var address = try socketAddress(agentSocketPath)
-    let listener = socket(AF_UNIX, SOCK_STREAM, 0)
-    guard listener >= 0 else {
-        throw ToolError.agent("cannot create a socket")
-    }
-    let previous = umask(0o077)
-    let bound = withSocketAddress(&address) { bind(listener, $0, $1) }
-    umask(previous)
-    guard bound == 0, listen(listener, 16) == 0 else {
-        throw ToolError.agent("cannot listen on \(agentSocketPath)")
-    }
 
-    let agent = SessionAgent(listener: listener, executable: executable)
+    let agent = SessionAgent(listener: listener, socketNode: node)
     agent.start()
     appendAccessLog("agent started")
     dispatchMain()
-}
-
-/// Start the agent as its own session, detached from the terminal, with no inherited input, output or environment.
-private func spawnAgent() throws {
-    guard let executable = ownExecutablePath else {
-        throw ToolError.agent("cannot find gh-touchid's own executable")
-    }
-    var attributes: posix_spawnattr_t?
-    posix_spawnattr_init(&attributes)
-    defer { posix_spawnattr_destroy(&attributes) }
-    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
-
-    var actions: posix_spawn_file_actions_t?
-    posix_spawn_file_actions_init(&actions)
-    defer { posix_spawn_file_actions_destroy(&actions) }
-    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
-    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
-
-    var argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable), strdup("agent"), nil]
-    defer { argv.forEach { free($0) } }
-#if GH_TOUCHID_TESTING
-    let inherited = ["GH_TOUCHID_TEST_DIR=\(testDirectory)"]
-#else
-    let inherited: [String] = []
-#endif
-    var environment: [UnsafeMutablePointer<CChar>?] = inherited.map { strdup($0) } + [nil]
-    defer { environment.forEach { free($0) } }
-    var pid: pid_t = 0
-    let status = posix_spawn(&pid, executable, &actions, &attributes, &argv, &environment)
-    guard status == 0 else {
-        throw ToolError.agent("cannot start the agent: \(String(cString: strerror(status)))")
-    }
-}
-
-func ensureAgent() throws {
-    if agentRequest(["op": "status"]) != nil {
-        return
-    }
-    try ensureSessionDirectory()
-    try spawnAgent()
-    for _ in 0 ..< 50 {
-        if agentRequest(["op": "status"]) != nil {
-            return
-        }
-        usleep(100_000)
-    }
-    throw ToolError.agent("the agent did not start")
 }

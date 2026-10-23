@@ -116,31 +116,109 @@ private func askInTerminal(_ question: String) -> String? {
 /// What `status` says about Git and gh: for each owner the credential helpers Git asks for its repositories, each with
 /// the fix unless it is this gh-touchid alone; then which `gh` is first on PATH and whether another gh is signed in.
 func gitStatus(owners: [String]) -> [String] {
-    let ownName = ownRealExecutablePath.map { ($0 as NSString).lastPathComponent }
-    var lines: [String] = []
-    for stored in owners {
-        let owner = configuredOwner(stored)
-        guard let helpers = credentialHelpers(for: probeURL(owner: owner)) else {
-            lines.append("Git for \(owner): cannot ask git")
-            continue
+    owners.map { ownerGitStatus($0).line } + gitHubCLIStatus()
+}
+
+/// What `session` warns of once it has registered: each owner of the session's repositories whose Git does not ask
+/// this gh-touchid alone, and a `gh` first on PATH that is not this gh-touchid's wrapper, each as `status` says it.
+func sessionWarnings(repositories: [String]) -> [String] {
+    var owners: [String] = []
+    for repository in repositories {
+        let owner = String(repository.prefix(while: { $0 != "/" }))
+        if !owners.contains(owner) {
+            owners.append(owner)
         }
-        if helpers.count == 1, runsThisGitCredential(helpers[0]) {
-            lines.append("Git for \(owner) asks: this gh-touchid only")
-            continue
-        }
-        let asked = helpers.map { helper -> String in
-            if runsThisGitCredential(helper) {
-                return "this gh-touchid"
-            }
-            let name = helperName(helper)
-            return name == "gh-touchid" || name == ownName ? "another \(name)" : name
-        }
-        lines.append(
-            "Git for \(owner) asks: \(asked.isEmpty ? "no credential helper" : asked.joined(separator: ", ")); "
-                + "fix: gh-touchid git setup \(owner)"
-        )
     }
-    return lines + gitHubCLIStatus()
+    let gitLines = owners.map(ownerGitStatus).filter { !$0.isThisOnly }.map(\.line)
+    let gh = gitHubCLIOnPath()
+    return gitLines + (gh.isWrapper ? [] : [gh.line])
+}
+
+/// The scopes Git reads after the global file. `git setup` writes the global file, so it cannot undo their settings.
+private let repositoryScopes: Set<String> = ["local", "worktree", "command"]
+
+/// The `status` line of one stored owner, and whether Git asks this gh-touchid alone for its repositories.
+private func ownerGitStatus(_ stored: String) -> (line: String, isThisOnly: Bool) {
+    let owner = configuredOwner(stored)
+    guard let settings = credentialHelperSettings(for: probeURL(owner: owner)) else {
+        return ("Git for \(owner): cannot ask git", false)
+    }
+    let helpers = askedHelpers(settings)
+    if isThisGitCredentialOnly(helpers) {
+        return ("Git for \(owner) asks: this gh-touchid only", true)
+    }
+    let ownName = ownRealExecutablePath.map { ($0 as NSString).lastPathComponent }
+    let asked = helpers.map { helper -> String in
+        if runsThisGitCredential(helper) {
+            return "this gh-touchid"
+        }
+        let name = helperName(helper)
+        return name == "gh-touchid" || name == ownName ? "another \(name)" : name
+    }
+    // Settings read after the global file must go first; `git setup` is still needed when the rest is not right.
+    let later = settings.filter { repositoryScopes.contains($0.scope) }
+    var fixes: [String] = []
+    if !later.isEmpty {
+        let files = RepositoryConfigurationFiles()
+        for setting in later {
+            let fix = removal(of: setting, files: files)
+            if !fixes.contains(fix) {
+                fixes.append(fix)
+            }
+        }
+    }
+    let earlier = settings.filter { !repositoryScopes.contains($0.scope) }
+    if later.isEmpty || !isThisGitCredentialOnly(askedHelpers(earlier)) {
+        fixes.append("gh-touchid git setup \(owner)")
+    }
+    return (
+        "Git for \(owner) asks: \(asked.isEmpty ? "no credential helper" : asked.joined(separator: ", ")); "
+            + "fix: \(fixes.joined(separator: ", then "))",
+        false
+    )
+}
+
+private func isThisGitCredentialOnly(_ helpers: [String]) -> Bool {
+    helpers.count == 1 && runsThisGitCredential(helpers[0])
+}
+
+/// Where this repository's own configuration lives, to tell a relative origin's file and the scope's own files.
+private struct RepositoryConfigurationFiles {
+    /// The folder Git names relative files from: the top of the working tree, or the Git folder of a bare repository.
+    let base: String?
+    /// The files `git config --local` and `git config --worktree` write, real paths; nil when Git cannot tell.
+    let local: String?
+    let worktree: String?
+
+    init() {
+        base = gitOutput(["rev-parse", "--show-toplevel"]) ?? gitOutput(["rev-parse", "--absolute-git-dir"])
+        let paths = gitOutput(["rev-parse", "--path-format=absolute", "--git-path", "config", "--git-path",
+                               "config.worktree"])?.split(separator: "\n").map(String.init) ?? []
+        local = paths.count == 2 ? realPath(paths[0]) ?? paths[0] : nil
+        worktree = paths.count == 2 ? realPath(paths[1]) ?? paths[1] : nil
+    }
+
+    /// A file as Git names it in `--show-origin`, as an absolute path.
+    func absolute(_ file: String) -> String {
+        guard !file.hasPrefix("/"), let base else {
+            return file
+        }
+        return (base as NSString).appendingPathComponent(file)
+    }
+}
+
+/// The command that removes a setting of a scope read after the global file, and where it is set.
+private func removal(of setting: HelperSetting, files: RepositoryConfigurationFiles) -> String {
+    guard setting.scope != "command", !setting.file.isEmpty else {
+        return "remove \(setting.key) from GIT_CONFIG_PARAMETERS or GIT_CONFIG_KEY_<n> in the environment"
+    }
+    let file = files.absolute(setting.file)
+    let real = realPath(file) ?? file
+    // An included file is read in the scope of the file including it, but only `--file` changes it.
+    let option = setting.scope == "local" && real == files.local ? "--local"
+        : setting.scope == "worktree" && real == files.worktree ? "--worktree"
+        : "--file \(shellQuoted(file))"
+    return "git config \(option) --unset-all \(shellQuoted(setting.key)) (set in \(displayFolder(file)))"
 }
 
 /// The owner as a `credential.https://github.com/<owner>.helper` setting writes it, such as `Acme` for the stored
@@ -156,36 +234,40 @@ private func configuredOwner(_ owner: String) -> String {
     return owner
 }
 
-/// Which `gh` is first on PATH: this gh-touchid's wrapper, another gh, or none, with the fix for this installation unless
-/// it is the wrapper; then, when a gh other than the wrapper is on PATH, whether gh is signed in to github.com.
+/// Which `gh` is first on PATH, as `gitHubCLIOnPath` says it; then, when a gh other than the wrapper is on PATH,
+/// whether gh is signed in to github.com.
 private func gitHubCLIStatus() -> [String] {
-    let found = commandsOnPath("gh")
-    let first = found.first
-    var lines: [String] = []
-    let wrapper = ownRealExecutablePath.flatMap { own in
-        realPath((gitHubCLIWrapperFolder(own: own, stable: false) as NSString).appendingPathComponent("gh"))
-    }
-    if let own = ownRealExecutablePath, let wrapper {
-        if let first, realPath(first) == wrapper {
-            lines.append("gh on PATH: \(first), this gh-touchid's wrapper")
-        } else {
-            let folder = gitHubCLIWrapperFolder(own: own, stable: true)
-            let onPath = commandsOnPath((own as NSString).lastPathComponent).first.flatMap(realPath) == own
-            let command = onPath ? (own as NSString).lastPathComponent : gitCredentialExecutable()?.path ?? own
-            let fix = "fix: add `export PATH=\"\(folder):$PATH\"` to your shell's profile, "
-                + "or `alias gh='\(command) gh'` for your own shell only"
-            lines.append(first.map { "gh on PATH: \($0), another gh; \(fix)" } ?? "gh on PATH: none; \(fix)")
-        }
-    } else {
-        lines.append("gh on PATH: \(first ?? "none"); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`")
-    }
-    if found.contains(where: { realPath($0) != wrapper }), let login = gitHubCLISignIn() {
+    let onPath = gitHubCLIOnPath()
+    var lines = [onPath.line]
+    if commandsOnPath("gh").contains(where: { realPath($0) != onPath.wrapper }), let login = gitHubCLISignIn() {
         lines.append(
             "another gh is signed in \(login.isEmpty ? "to github.com" : "as \(login)"): any program can use that "
                 + "login; `gh auth logout` to close it"
         )
     }
     return lines
+}
+
+/// Which `gh` is first on PATH: this gh-touchid's wrapper, another gh, or none, with the fix for this installation unless
+/// it is the wrapper; whether it is the wrapper; and the wrapper's real path, nil when this installation has none.
+private func gitHubCLIOnPath() -> (line: String, isWrapper: Bool, wrapper: String?) {
+    let first = commandsOnPath("gh").first
+    let wrapper = ownRealExecutablePath.flatMap { own in
+        realPath((gitHubCLIWrapperFolder(own: own, stable: false) as NSString).appendingPathComponent("gh"))
+    }
+    guard let own = ownRealExecutablePath, let wrapper else {
+        let line = "gh on PATH: \(first ?? "none"); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`"
+        return (line, false, nil)
+    }
+    if let first, realPath(first) == wrapper {
+        return ("gh on PATH: \(first), this gh-touchid's wrapper", true, wrapper)
+    }
+    let folder = gitHubCLIWrapperFolder(own: own, stable: true)
+    let onPath = commandsOnPath((own as NSString).lastPathComponent).first.flatMap(realPath) == own
+    let command = onPath ? (own as NSString).lastPathComponent : gitCredentialExecutable()?.path ?? own
+    let fix = "fix: add `export PATH=\"\(folder):$PATH\"` to your shell's profile, "
+        + "or `alias gh='\(command) gh'` for your own shell only"
+    return (first.map { "gh on PATH: \($0), another gh; \(fix)" } ?? "gh on PATH: none; \(fix)", false, wrapper)
 }
 
 /// The folder of this installation's gh wrapper, `libexec/bin` beside the real folder of the executable `own`. With
@@ -349,28 +431,66 @@ private func shellQuoted(_ text: String) -> String {
     return "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
+/// A `credential.helper` or `credential.<url>.helper` setting: the key as Git lists it, its value (an empty one drops
+/// the helpers before it), the scope Git read it in (`system`, `global`, `local`, `worktree`, `command`, …), and the
+/// file it is in as `--show-origin` names it, possibly relative; "" when it is not in a file.
+private struct HelperSetting {
+    let key: String
+    let value: String
+    let scope: String
+    let file: String
+}
+
 /// The credential helpers Git asks for `url`, in order: every `credential.helper` and `credential.<url>.helper` that
 /// applies to it, collected in the order Git reads its configuration, an empty one dropping those before it. Which
 /// sections apply is left to Git (`--get-urlmatch`). Nil when Git cannot be asked.
 func credentialHelpers(for url: String) -> [String]? {
-    guard let listing = runGit(["config", "--null", "--get-regexp", #"^credential\.(.*\.)?helper$"#]) else {
+    credentialHelperSettings(for: url).map(askedHelpers)
+}
+
+/// The helpers that `settings`, read in order, leave Git asking.
+private func askedHelpers(_ settings: [HelperSetting]) -> [String] {
+    var helpers: [String] = []
+    for setting in settings {
+        if setting.value.isEmpty {
+            helpers.removeAll()
+        } else {
+            helpers.append(setting.value)
+        }
+    }
+    return helpers
+}
+
+/// The helper settings that apply to `url`, in the order Git reads them. Nil when Git cannot be asked.
+private func credentialHelperSettings(for url: String) -> [HelperSetting]? {
+    let pattern = #"^credential\.(.*\.)?helper$"#
+    guard let listing = runGit(["config", "--null", "--show-scope", "--show-origin", "--get-regexp", pattern]) else {
         return nil
     }
     guard listing.status == 0 else {
         return listing.status == 1 ? [] : nil // 1: no helper set anywhere
     }
-    var entries: [(section: String?, value: String)] = []
-    for record in listing.output.split(separator: 0) {
-        let parts = String(decoding: record, as: UTF8.self)
-            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+    // Each setting is three NUL-terminated fields: the scope, the origin (`file:<path>`, `command line:`, …), and the
+    // key and value separated by a newline.
+    var fields = listing.output.split(separator: 0, omittingEmptySubsequences: false).map {
+        String(decoding: $0, as: UTF8.self)
+    }
+    if fields.last == "" {
+        fields.removeLast()
+    }
+    var entries: [(section: String?, setting: HelperSetting)] = []
+    for start in stride(from: 0, to: fields.count - 2, by: 3) {
+        let parts = fields[start + 2].split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2 else {
             continue // a helper without a value, which Git rejects
         }
-        let key = parts[0]
+        let key = String(parts[0])
         let section = key == "credential.helper"
             ? nil
             : String(key.dropFirst("credential.".count).dropLast(".helper".count))
-        entries.append((section, String(parts[1])))
+        let origin = fields[start + 1]
+        let file = origin.hasPrefix("file:") ? String(origin.dropFirst("file:".count)) : ""
+        entries.append((section, HelperSetting(key: key, value: String(parts[1]), scope: fields[start], file: file)))
     }
 
     var sections: [String] = []
@@ -398,15 +518,7 @@ func credentialHelpers(for url: String) -> [String]? {
         }
     }
 
-    var helpers: [String] = []
-    for entry in entries where entry.section.map(matching.contains) ?? true {
-        if entry.value.isEmpty {
-            helpers.removeAll()
-        } else {
-            helpers.append(entry.value)
-        }
-    }
-    return helpers
+    return entries.filter { $0.section.map(matching.contains) ?? true }.map(\.setting)
 }
 
 /// Whether `helper` is `!<path> git credential` with a path, or a name found on PATH, that resolves to this

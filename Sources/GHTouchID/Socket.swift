@@ -1,8 +1,11 @@
 import Darwin
 import Foundation
 
-// Daemon and clients talk over a unix socket in the user's private directory, one newline-terminated JSON message
-// each way per connection. The socket is named after the executable's path, so every build has its own daemon.
+// Agent and clients talk over a unix socket in the user's private directory, one newline-terminated JSON message
+// each way per connection. Builds that share an agent (`sharesAgentSocket`) use `agent.sock`; every other build has
+// an agent of its own, at a socket named after its executable's path. Each socket has a lock file beside it, held
+// while an agent probes, binds or removes the socket, so that agents starting or stopping at once never remove a
+// socket another one serves.
 
 /// 64-bit FNV-1a of `text`'s UTF-8 bytes as 16 hex digits.
 private func fnv1a(_ text: String) -> String {
@@ -14,8 +17,41 @@ private func fnv1a(_ text: String) -> String {
     return String(format: "%016llx", hash)
 }
 
-let agentSocketPath = (sessionDirectory as NSString)
-    .appendingPathComponent("agent-\(fnv1a(ownExecutablePath ?? "")).sock")
+private let agentSocketName = sharesAgentSocket ? "agent" : "agent-\(fnv1a(ownExecutablePath ?? ""))"
+
+let agentSocketPath = (sessionDirectory as NSString).appendingPathComponent("\(agentSocketName).sock")
+
+let agentLockPath = (sessionDirectory as NSString).appendingPathComponent("\(agentSocketName).lock")
+
+/// Runs `body` holding the agent's lock file (`flock`); nil when the lock file cannot be opened or locked.
+func withAgentLock<T>(_ body: () throws -> T) rethrows -> T? {
+    let fd = open(agentLockPath, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o600)
+    guard fd >= 0 else {
+        return nil
+    }
+    defer { close(fd) } // closing it releases the lock
+    while flock(fd, LOCK_EX) != 0 {
+        guard errno == EINTR else {
+            return nil
+        }
+    }
+    return try body()
+}
+
+/// A file's identity, to tell the socket an agent bound from one bound later at the same path.
+struct FileNode: Equatable {
+    let device: dev_t
+    let inode: ino_t
+
+    init?(path: String) {
+        var status = stat()
+        guard lstat(path, &status) == 0 else {
+            return nil
+        }
+        device = status.st_dev
+        inode = status.st_ino
+    }
+}
 
 func ensureSessionDirectory() throws {
     if mkdir(sessionDirectory, 0o700) != 0 && errno != EEXIST {
@@ -108,30 +144,90 @@ func sendMessage(_ fd: Int32, _ message: [String: Any]) -> Bool {
     return writeAll(fd, body + Data([0x0A]))
 }
 
-/// Ask this build's daemon; nil when none answers. A socket served by anything other than this very executable,
-/// running as this user, is not trusted.
-func agentRequest(_ request: [String: Any]) -> [String: Any]? {
-    guard let ownPath = ownExecutablePath,
-          var address = try? socketAddress(agentSocketPath) else {
+/// A connection to the socket at `path`; nil when nothing accepts it.
+func connectSocket(_ path: String, timeoutSeconds: Int) -> Int32? {
+    guard var address = try? socketAddress(path) else {
         return nil
     }
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else {
         return nil
     }
-    defer { close(fd) }
-    configureSocket(fd, timeoutSeconds: 5)
+    configureSocket(fd, timeoutSeconds: timeoutSeconds)
     guard withSocketAddress(&address, { connect(fd, $0, $1) }) == 0 else {
+        close(fd)
         return nil
     }
-    var uid: uid_t = 0
-    var gid: gid_t = 0
-    guard getpeereid(fd, &uid, &gid) == 0, uid == getuid(),
-          let peer = peerProcess(fd), executablePath(peer) == ownPath,
-          sendMessage(fd, request),
-          let line = readMessage(fd),
-          let reply = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+    return fd
+}
+
+/// The program at the other end of a socket, as messages name it: `/path/to/program[pid]`.
+func socketHolder(_ fd: Int32) -> String {
+    guard let pid = peerProcess(fd) else {
+        return "an unknown process"
+    }
+    return "\(executablePath(pid) ?? "?")[\(pid)]"
+}
+
+/// How one request to a socket went.
+enum Exchange {
+    /// Nothing accepted the connection.
+    case absent
+    /// A peer that `accepts` takes answered with `reply`.
+    case answered([String: Any], PeerIdentity)
+    /// The peer is not one `accepts` takes; its reply, if any, was ignored.
+    case rejected(PeerIdentity, holder: String)
+    /// A peer that `accepts` takes did not answer.
+    case failed
+}
+
+/// One request to the socket at `path` and its reply, from a peer that `accepts` takes; nothing is sent before the
+/// peer's identity is settled. A peer whose kernel cdhash decides who it is gets the request only if `accepts` takes
+/// it. One that meets the newer-release requirement is a newer release only if the version it states is later: it is
+/// asked for its status (which changes nothing) on this connection, and gets the request on a second one only if
+/// that identity is accepted and the second connection reaches the very same process.
+func exchange(_ path: String, _ request: [String: Any], accepts: (PeerIdentity) -> Bool) -> Exchange {
+    guard let fd = connectSocket(path, timeoutSeconds: 5) else {
+        return .absent
+    }
+    defer { close(fd) }
+    switch examinePeer(fd) {
+    case let .decided(peer):
+        guard accepts(peer) else {
+            return .rejected(peer, holder: socketHolder(fd))
+        }
+        return roundTrip(fd, request).map { .answered($0, peer) } ?? .failed
+    case let .meetsRequirement(process):
+        // only worth asking when a newer release is one `accepts` could take at all
+        guard accepts(.newer(toolVersion)) else {
+            let peer = PeerIdentity.untrusted("it meets the release requirement, which is not enough here")
+            return .rejected(peer, holder: socketHolder(fd))
+        }
+        let asksStatus = request["op"] as? String == "status"
+        let probe: [String: Any] = ["op": "status", "protocol": agentProtocol, "version": toolVersion]
+        let status = roundTrip(fd, asksStatus ? request : probe)
+        let peer = identity(of: .meetsRequirement(process), statedVersion: status?["version"])
+        guard accepts(peer) else {
+            return .rejected(peer, holder: socketHolder(fd))
+        }
+        if asksStatus, let status {
+            return .answered(status, peer)
+        }
+        guard let second = connectSocket(path, timeoutSeconds: 5) else {
+            return .failed
+        }
+        defer { close(second) }
+        guard case let .meetsRequirement(again) = examinePeer(second), again == process else {
+            return .failed
+        }
+        return roundTrip(second, request).map { .answered($0, peer) } ?? .failed
+    }
+}
+
+/// `request` on `fd` and the reply; nil when there is none.
+private func roundTrip(_ fd: Int32, _ request: [String: Any]) -> [String: Any]? {
+    guard sendMessage(fd, request), let line = readMessage(fd) else {
         return nil
     }
-    return reply
+    return try? JSONSerialization.jsonObject(with: line) as? [String: Any]
 }

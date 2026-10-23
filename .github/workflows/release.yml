@@ -1,7 +1,8 @@
 # Builds the release tarball and checks it and its Homebrew formula on pull requests that touch what goes into them,
 # and on version tags; a tag also signs gh-touchid with the Developer ID and the hardened runtime, has Apple notarize
 # it, checks the signed tarball again, and publishes it: the GitHub release, the formula in
-# georgelubaretsi/homebrew-tap and the Nix pin in release/nix.json on main. Pull requests build ad hoc signed only.
+# georgelubaretsi/homebrew-tap, and on main the Nix pin in release/nix.json and the release's cdhashes in
+# release/known-releases. Pull requests build ad hoc signed only.
 name: Release
 
 on:
@@ -36,6 +37,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The whole history with its tags: the tests build the v0.4.1 sources (git archive v0.4.1).
+          fetch-depth: 0
 
       # The flake reads the same constant for its package version.
       - name: Check the tag against the version
@@ -58,7 +61,7 @@ jobs:
         run: nix develop --command just package --output dist --xcode "$XCODE" --xcode-version "$XCODE_VERSION"
 
       # The tarball as installed: its layout, gh-touchid through links, the gh wrapper, the bundled gh's SHA-256 and
-      # cdhashes pinned in gh-touchid, and a changed gh refused.
+      # cdhashes pinned in gh-touchid, the known releases built in, and a changed gh refused.
       - name: Check the tarball
         run: |
           set -euo pipefail
@@ -93,6 +96,10 @@ jobs:
     environment: release
     permissions:
       contents: read
+    # The signed gh-touchid's cdhash of each architecture, which publish adds to release/known-releases on main.
+    outputs:
+      cdhash-arm64: ${{ steps.cdhashes.outputs.arm64 }}
+      cdhash-x86_64: ${{ steps.cdhashes.outputs.x86_64 }}
     env:
       # notarytool from the Xcode the build used
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -124,6 +131,25 @@ jobs:
 
       - name: Check the signed tarball
         run: scripts/check-tarball.sh dist/gh-touchid-*-macos.tar.gz "${GITHUB_REF_NAME#v}"
+
+      # Read here, because publish runs on Linux, without codesign.
+      - name: Read the signed gh-touchid's cdhashes
+        id: cdhashes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir "$RUNNER_TEMP/signed"
+          tar -xzf "dist/gh-touchid-$version-macos.tar.gz" -C "$RUNNER_TEMP/signed"
+          binary="$RUNNER_TEMP/signed/gh-touchid-$version-macos/bin/gh-touchid"
+          for architecture in arm64 x86_64; do
+            cdhash="$(codesign -d -vvv --arch "$architecture" "$binary" 2>&1 | sed -n 's/^CDHash=//p')" || true
+            if ! [[ "$cdhash" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::the signed gh-touchid has no cdhash for $architecture"
+              exit 1
+            fi
+            echo "gh-touchid $architecture: $cdhash"
+            echo "$architecture=$cdhash" >> "$GITHUB_OUTPUT"
+          done
 
       # Nix only now, after the keychain is gone: the dev shell for the formula check.
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -160,6 +186,20 @@ jobs:
       - name: Check the tarball against its SHA-256
         working-directory: dist
         run: sha256sum --check ./*.tar.gz.sha256
+
+      # Before anything is published: the sign job read a cdhash for each architecture of the signed gh-touchid.
+      - name: Check the signed gh-touchid's cdhashes
+        env:
+          ARM64_CDHASH: ${{ needs.sign.outputs.cdhash-arm64 }}
+          X86_64_CDHASH: ${{ needs.sign.outputs.cdhash-x86_64 }}
+        run: |
+          set -euo pipefail
+          for cdhash in "$ARM64_CDHASH" "$X86_64_CDHASH"; do
+            if ! [[ "$cdhash" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::the sign job passed no cdhash for each architecture of the signed gh-touchid"
+              exit 1
+            fi
+          done
 
       - name: Create the GitHub release
         env:
@@ -212,16 +252,28 @@ jobs:
           ref: main
           path: main
 
-      - name: Pin the release for Nix
+      # One commit: the Nix pin, and the release added to release/known-releases, which later releases build in.
+      - name: Pin the release for Nix and add it to the known releases
+        env:
+          ARM64_CDHASH: ${{ needs.sign.outputs.cdhash-arm64 }}
+          X86_64_CDHASH: ${{ needs.sign.outputs.cdhash-x86_64 }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          known=main/release/known-releases
+          if awk -v version="$version" '$1 == version { found = 1 } END { exit !found }' "$known"; then
+            echo "::error::release/known-releases on main lists $version already"
+            exit 1
+          fi
           sha256="$(cut -d ' ' -f 1 "dist/gh-touchid-$version-macos.tar.gz.sha256")"
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/gh-touchid-$version-macos.tar.gz"
           printf '{\n  "version": "%s",\n  "url": "%s",\n  "sha256": "%s"\n}\n' "$version" "$url" "$sha256" \
             > main/release/nix.json
+          # A last line without its newline would run into the new one.
+          [ ! -s "$known" ] || [ -z "$(tail -c 1 "$known")" ] || echo >> "$known"
+          printf '%s trusted arm64=%s x86_64=%s\n' "$version" "$ARM64_CDHASH" "$X86_64_CDHASH" >> "$known"
           cd main
-          git add release/nix.json
+          git add release/nix.json release/known-releases
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "Pin release $version"
           git push origin HEAD:main

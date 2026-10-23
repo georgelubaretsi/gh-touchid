@@ -39,7 +39,7 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 | --- | --- | --- |
 | Command-line arguments and environment (`GH_REPO`, `GH_TOUCHID_AS`) | any program running as the user | They choose the repository and command shown in the dialog; titles and bodies are shown in full; flags that could reveal a token (`auth token`, `--show-token`, `alias`, `extension`) are refused |
 | Git's credential requests (`git credential get`) | Git | Answered only when the nearest non-shell ancestor is `git-remote-http(s)` and stdout is not a terminal |
-| The background agent's Unix socket | processes of the same user | `register`, `check`, `status` and `lock` for any same-user peer; `begin-approval`, `approve`, `deny` and `elevate` only for a peer running the same executable; clients trust only an agent served by their own executable |
+| The background agent's Unix socket | processes of the same user | Every request and reply carries the protocol (1) and the version; a protocol the agent does not speak is refused before anything is done. `register` (always the caller's own session root), `check`, `status` and `lock` for any same-user peer; `begin-approval`, `approve`, `deny` and `elevate` only for a trusted peer (boundary 3). Clients act only on replies of a trusted agent |
 | The local server on `127.0.0.1:47911` (`app create`, `app set`, `app login`) | the browser, and any web page or local process | Only `GET`; a callback must carry this attempt's random `state`; the code exchange needs the PKCE verifier and the client secret; the manifest page stops being served once an App was made |
 | GitHub's replies | GitHub | Parsed defensively; replies that hold tokens never go into errors; a sign-in without an expiry or a refresh token is refused |
 | `gh help reference` of the pinned gh | the pinned gh | Parsed only to tell which flags take values, for ambiguous `-R` |
@@ -52,7 +52,16 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
    gh starts (editor, Git, the repository's hooks, extensions) inherit the token while gh runs.
 2. **gh-touchid → Git.** Git's transport gets the token over the credential-helper pipe. Git's tokens are not
    revoked; they run out with the sign-in's access token.
-3. **gh-touchid ↔ background agent.** The agent holds no tokens or secrets, only session and elevation state.
+3. **gh-touchid ↔ background agent.** The agent holds no tokens or secrets, only session and elevation state. Each
+   side identifies the other by the connection's audit token (`identifyPeer`): same user, a valid code signature, the
+   hardened runtime when it has it, then the kernel's cdhash of the peer. Trusted: this release's own cdhashes, an
+   earlier release on the built-in list (`release/known-releases`, marked `trusted`), or a later release whose code
+   meets `releaseCodeRequirement` (gh-touchid's Developer ID) and which states a later version. A release marked
+   `revoked` is not trusted; the first client that meets its agent locks it and carries nothing over. The
+   kernel keeps a running program's cdhash after its file is deleted; its code signature can then no longer be
+   checked, so a later release whose file an upgrade deleted is not trusted. Releases share `agent.sock`; every
+   other build keeps an agent named after its path and trusts its own path. Changes to the socket path happen under
+   `agent.lock`, and an agent deletes only the socket it bound.
 4. **gh-touchid ↔ GitHub.** All token minting and revocation happens here; GitHub enforces the narrowed scope.
 5. **Browser ↔ local server.** The sign-in result crosses here; `state` and PKCE bind it to this attempt.
 6. **gh-touchid ↔ Keychain.** Items are read only after Touch ID or a session check; `status` and the checks before
@@ -72,6 +81,8 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 - Renewing, replacing and reading a sign-in happen under the owner's lock, so a single-use refresh token is never
   spent twice and an App's secret is never paired with another App's sign-in.
 - Release builds run only the pinned gh; only development and test builds honour `GH_TOUCHID_GH`.
+- Only a trusted peer (boundary 3) may approve, deny or elevate, and clients act only on a trusted agent's
+  answers. A release that shares `agent.sock` never trusts a peer because of its file path.
 
 ## Accepted risks
 
@@ -87,6 +98,14 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
   because the browser is sent to GitHub only once gh-touchid holds the port.
 - **An expired or revoked sign-in is found after the use's Touch ID**, since the checks before a dialog read no
   secret.
+- **A genuine older release can be run as the agent** by a same-user process (old releases stay downloadable). It
+  holds only sessions approved with Touch ID through it. A release found flawed is marked `revoked`, and newer
+  releases then lock its agent.
+- **An untrusted program can hold `agent.sock`.** Clients then use no session (each use asks for Touch ID) and
+  `status` names it; they do not end it, since it may be a later release whose file is already gone. A same-user
+  process could always end the agent.
+- **A release's own entry is added after it is published**, by the release workflow, so the next release knows it.
+  The list in the repository is part of what a release trusts.
 
 ## Out of scope
 
@@ -103,6 +122,7 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 - `Access.swift` (policy), `GitHubApp.swift` (narrowing, permissions, renewal, revocation).
 - `SignIn.swift`, `LocalServer.swift`, `AppManifest.swift` (browser flows, `state`, PKCE, what gets stored when).
 - `GitHubCLI.swift` (pinned gh, cdhash, the environment gh gets, refused commands, signals).
-- `Commands.swift` `gitCredential` (who gets a Git credential), `Agent.swift` and `Socket.swift` (peer checks).
+- `Commands.swift` `gitCredential` (who gets a Git credential); `Identity.swift` (`identifyPeer`, `sharesAgentSocket`),
+  `Agent.swift`, `AgentClient.swift` and `Socket.swift` (`exchange`, `withAgentLock`; peer checks, socket ownership).
 - `Repository.swift` and `GitHubFlags.swift` (which repository a command is for, which decides the dialog and token).
 - `Secrets.swift` (Keychain items, attribute-only reads, the development namespace).

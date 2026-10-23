@@ -4,7 +4,8 @@
 # release/gh.json and refused unless its SHA-256 matches the pin:
 #
 #   gh-touchid-<version>-macos/
-#     bin/gh-touchid                  checks libexec/gh-touchid/gh's SHA-256, and its cdhash as gh starts
+#     bin/gh-touchid                  checks libexec/gh-touchid/gh's SHA-256, and its cdhash as gh starts; knows the
+#                                     earlier releases in release/known-releases
 #     libexec/bin/gh                  runs `gh-touchid gh "$@"` with this installation's bin/gh-touchid; on PATH only
 #                                     for those who put libexec/bin there, so it sits beside any other gh
 #     libexec/gh-touchid/gh           GitHub's gh for macOS (universal, signed by GitHub)
@@ -76,7 +77,7 @@ for architecture in arm64 x86_64; do
 done
 "$root/scripts/build.sh" ${build_arguments[@]+"${build_arguments[@]}"} \
   --gh ../libexec/gh-touchid/gh --gh-sha256 "${bundled%% *}" "${cdhash_arguments[@]}" \
-  --output "$stage/bin/gh-touchid"
+  --known-releases "$root/release/known-releases" --output "$stage/bin/gh-touchid"
 chmod 755 "$stage/bin/gh-touchid"
 cat > "$stage/libexec/bin/gh" <<'EOF'
 #!/bin/sh

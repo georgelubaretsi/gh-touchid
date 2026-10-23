@@ -1,0 +1,12 @@
+# The earlier releases gh-touchid knows, by the cdhash of each architecture of their signed bin/gh-touchid.
+# scripts/build.sh --known-releases builds this list into a release (knownReleaseList in BuildConfiguration.swift).
+# A release trusts the background program and the clients of a release listed `trusted` as it trusts its own. One
+# listed `revoked` it no longer trusts: it locks that release's background program, and the sessions held there end,
+# nothing carried over (each program runs `gh-touchid session` again). The release workflow appends each release it
+# publishes, with the cdhashes read from the signed binary (`codesign -d -vvv --arch ARCH`); marking a release
+# revoked is a change made by hand.
+#
+# One release per line, `VERSION STATUS arm64=CDHASH x86_64=CDHASH`: STATUS is trusted or revoked, each CDHASH is 40
+# lowercase hex digits. Lines starting with # and empty lines are ignored.
+0.4.0 trusted arm64=1ba296cc6662f7d96f726ffc18404c839c446a6c x86_64=df98abc9be8ac0a3752f14ecbc76b0c9f1d71ffc
+0.4.1 trusted arm64=0bb5bd491364fe555ef9c0d471e3639ff9444844 x86_64=8c0518e3193fc95c528a5b38d462d7f1c3b6eeb1

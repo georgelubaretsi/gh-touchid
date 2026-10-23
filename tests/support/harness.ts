@@ -31,6 +31,19 @@ export const repositoryRoot = resolve(import.meta.dir, "../..");
 /** The test build (`scripts/build.sh --testing`): GH_TOUCHID_BINARY, else build/test/gh-touchid. */
 export const binary = resolve(repositoryRoot, process.env.GH_TOUCHID_BINARY ?? "build/test/gh-touchid");
 
+/**
+ * The other builds scripts/test-builds.sh makes, to meet other releases: the same sources stating version 0.1.0,
+ * which the test build's list trusts; the test build with that one revoked on its list; and gh-touchid 0.4.1.
+ */
+export const builds = {
+  older: resolve(repositoryRoot, "build/test/older/gh-touchid"),
+  revoking: resolve(repositoryRoot, "build/test/revoking/gh-touchid"),
+  legacy: resolve(repositoryRoot, "build/test/legacy/gh-touchid"),
+} as const;
+
+/** The version `builds.older` states. */
+export const olderVersion = "0.1.0";
+
 /** Keychain services, which test builds keep as folders under secrets/ and comments/. */
 export const services = {
   app: "com.lubaretsi.gh-touchid.app",
@@ -50,6 +63,8 @@ export interface RunOptions {
   stdin?: string;
   /** Runs under script(1), so that standard input and output are a terminal. */
   tty?: boolean;
+  /** The gh-touchid executable to run (`run` and `start` only); by default the test build. */
+  binary?: string;
 }
 
 export interface RunResult {
@@ -232,9 +247,9 @@ export class TestEnv {
     );
   }
 
-  /** Starts the test build with `args`; watch it with the returned `Running`. */
+  /** Starts the test build (or `options.binary`) with `args`; watch it with the returned `Running`. */
   start(args: string[], options: RunOptions = {}): Running {
-    return this.startCommand([binary, ...args], options);
+    return this.startCommand([options.binary ?? binary, ...args], options);
   }
 
   /** Runs the test build with `args` to the end. */
@@ -425,34 +440,43 @@ export class TestEnv {
     return folder;
   }
 
-  // The agent (`gh-touchid agent`), which keeps sessions and elevations; its socket is run/agent-<hash>.sock
+  // The agent (`gh-touchid agent`), which keeps sessions and elevations. Test builds share run/agent.sock; 0.4.1
+  // listens at run/agent-<hash of its path>.sock.
+
+  /** run/agent.sock. */
+  get agentSocket(): string {
+    return join(this.dir, "run", "agent.sock");
+  }
 
   agentSockets(): string[] {
     const folder = join(this.dir, "run");
     return existsSync(folder)
       ? readdirSync(folder)
-          .filter((name) => name.startsWith("agent-") && name.endsWith(".sock"))
+          .filter((name) => name === "agent.sock" || (name.startsWith("agent-") && name.endsWith(".sock")))
           .map((name) => join(folder, name))
       : [];
   }
 
-  /** One request to this test's agent, as gh-touchid sends it; undefined when no agent answers. */
-  async agentRequest(request: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
-    const socket = this.agentSockets()[0];
-    return socket ? agentRequest(socket, request) : undefined;
+  /** `request` as it is to the agent at run/agent.sock (or `socket`); undefined when none answers. */
+  agentRequest(
+    request: Record<string, unknown>,
+    socket = this.agentSocket,
+  ): Promise<Record<string, unknown> | undefined> {
+    return agentRequest(socket, request);
   }
 
   /** Ends every agent this test started: `lock` over its socket, then SIGKILL to whatever still holds it. */
   async stopAgents(): Promise<void> {
     for (const socket of this.agentSockets()) {
-      await agentRequest(socket, { op: "lock" });
+      // 0.4.1 speaks no protocol version; agent.sock refuses a request without one
+      await agentRequest(socket, socket === this.agentSocket ? { op: "lock", protocol: 1 } : { op: "lock" });
       for (let attempt = 0; attempt < 100 && existsSync(socket); attempt++) {
         await Bun.sleep(20);
       }
       if (existsSync(socket)) {
         const holders = Bun.spawnSync(["/usr/sbin/lsof", "-t", socket]).stdout.toString().split(/\s+/).filter(Boolean);
-        for (const pid of holders) {
-          process.kill(Number(pid), "SIGKILL");
+        for (const pid of holders.map(Number).filter((pid) => pid !== process.pid)) {
+          process.kill(pid, "SIGKILL");
         }
         unlinkSync(socket);
       }
@@ -472,6 +496,11 @@ export class TestEnv {
 
 /** One newline-terminated JSON request to an agent's socket and its reply; undefined on any failure. */
 function agentRequest(socket: string, request: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
+  // under `bun test --concurrent`, connecting to a missing socket has surfaced as an unhandled error between tests,
+  // leaving the request unanswered
+  if (!existsSync(socket)) {
+    return Promise.resolve(undefined);
+  }
   const { promise, resolve } = Promise.withResolvers<Record<string, unknown> | undefined>();
   let reply = "";
   const connection = createConnection(socket);

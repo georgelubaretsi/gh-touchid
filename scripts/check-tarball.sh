@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Checks a release tarball the way it is installed: its layout, gh-touchid run through links as Homebrew links it, the
-# gh wrapper, the bundled gh's SHA-256 and cdhashes pinned in both slices of gh-touchid, and a changed gh refused. The
-# release workflow runs it on the tarball scripts/package.sh builds and again on the one scripts/sign.sh signs.
+# gh wrapper, the bundled gh's SHA-256 and cdhashes pinned in both slices of gh-touchid, the earlier releases of
+# release/known-releases built into both, a Developer ID signature that meets releaseCodeRequirement, and a changed gh
+# refused. The release workflow runs it on the tarball scripts/package.sh builds and again on the one scripts/sign.sh
+# signs. It reads release/known-releases and BuildConfiguration.swift from the checkout it is in.
 #
 #   scripts/check-tarball.sh TARBALL [VERSION]
 #
@@ -68,6 +70,37 @@ for architecture in arm64 x86_64; do
   for pin in "$expected" "$cdhashes"; do
     grep -q -a -F "$pin" "$work/gh-touchid-$architecture" || fail "the $architecture gh-touchid does not pin $pin"
   done
+done
+
+# The earlier releases of release/known-releases, in both slices of gh-touchid as knownReleaseList holds them:
+# `VERSION STATUS arm64=CDHASH,x86_64=CDHASH`. scripts/build.sh has checked each line.
+checkout="$(cd "$(dirname "$0")/.." && pwd)"
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    '' | '#'*) continue ;;
+  esac
+  read -r release_version status cdhashes <<< "$line"
+  entry="$release_version $status ${cdhashes// /,}"
+  for architecture in arm64 x86_64; do
+    grep -q -a -F "$entry" "$work/gh-touchid-$architecture" ||
+      fail "the $architecture gh-touchid does not know the release $entry"
+  done
+  echo "known release: $entry"
+done < "$checkout/release/known-releases"
+
+# Signed with a Developer ID, each slice meets the designated requirement that releases check of a newer release.
+requirement="$(sed -n 's/^let releaseCodeRequirement = #"\(.*\)"#$/\1/p' \
+  "$checkout/Sources/GHTouchID/BuildConfiguration.swift")"
+[ -n "$requirement" ] || fail "found no releaseCodeRequirement in Sources/GHTouchID/BuildConfiguration.swift"
+for architecture in arm64 x86_64; do
+  info="$(codesign -d -vv --arch "$architecture" "$root/bin/gh-touchid" 2>&1)"
+  if grep -q '^Authority=Developer ID Application: ' <<< "$info"; then
+    # `-R` and its value apart: in `-R=…` the `=` would be read as the start of the value, doubling the literal `=`.
+    codesign --verify --strict --arch "$architecture" -R "=$requirement" --verbose=2 "$root/bin/gh-touchid" ||
+      fail "the $architecture gh-touchid does not meet releaseCodeRequirement: $requirement"
+  else
+    echo "the $architecture gh-touchid is not signed with a Developer ID: releaseCodeRequirement not checked"
+  fi
 done
 
 # A changed gh is refused, through the gh wrapper reached by a link, before anything else happens.
