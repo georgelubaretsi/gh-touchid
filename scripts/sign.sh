@@ -143,7 +143,12 @@ else
   downloaded="$(/usr/bin/shasum -a 256 "$work/intermediate.cer")"
   [ "${downloaded%% *}" = "$intermediate_sha256" ] ||
     fail "$intermediate_url has SHA-256 ${downloaded%% *}, not $intermediate_sha256"
-  /usr/bin/security import "$work/intermediate.cer" -k "$keychain" -f x509
+  # The .p12 may carry the intermediate already, and importing a certificate the keychain holds fails. (The listing
+  # is read whole first: with pipefail, grep -q leaving early could fail the pipe.)
+  held="$(/usr/bin/security find-certificate -a -Z "$keychain")"
+  if ! grep -qi "^SHA-256 hash: $intermediate_sha256\$" <<< "$held"; then
+    /usr/bin/security import "$work/intermediate.cer" -k "$keychain" -f x509
+  fi
   # codesign may use the key without a dialog; then the keychain joins the search list, for codesign to find it.
   /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
   searched=()
