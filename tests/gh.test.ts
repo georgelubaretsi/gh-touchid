@@ -203,7 +203,7 @@ describe("Touch ID outcomes", () => {
 
   test("a denied Touch ID for an owner's App mints nothing", async () => {
     await using env = await TestEnv.create();
-    env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret", slug: "acme-agent" });
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"] });
     const result = await env.run(["gh", "-R", "acme/widgets", "issue", "list"], { env: { GH_TOUCHID_TEST_DENY: "1" } });
     expect(result.status).toBe(1);
     expect(result.auth).toHaveLength(1);
@@ -216,7 +216,7 @@ describe("Touch ID outcomes", () => {
   test("a locked screen fails without asking", async () => {
     await using env = await TestEnv.create();
     env.seedAccount("alice", aliceToken);
-    env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret" });
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"] });
     for (const args of [["as", "alice", "gh", "api", "user"], ["gh", "-R", "acme/widgets", "issue", "list"]]) {
       const result = await env.run(args, { env: { GH_TOUCHID_TEST_SCREEN_LOCKED: "1" } });
       expect(result.status).toBe(1);

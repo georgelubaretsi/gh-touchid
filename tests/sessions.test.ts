@@ -4,19 +4,16 @@
 import { describe, expect, test } from "bun:test";
 import { TestEnv } from "./support/harness";
 
-function seedAcme(env: TestEnv): void {
-  env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret", slug: "acme-agent" });
+/** acme's App, installed on acme/widgets and acme/gadgets, with alice signed in to it. */
+function seedAcme(env: TestEnv) {
+  return env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets", "gadgets"] });
 }
 
-/**
- * Approves the session that lists acme/widgets the way a client does: its first use asks once. No token can be minted
- * here (the stored App has no sign-in or key to mint with, and the mock no installation), so the use itself fails
- * after the approval; the approval stays.
- */
+/** Approves the session that lists acme/widgets the way a client does: its first use asks once, then runs gh. */
 async function approveSession(env: TestEnv): Promise<void> {
   const use = await env.run(["gh", "-R", "acme/widgets", "issue", "list"]);
+  expect(use.status).toBe(0);
   expect(use.auth).toHaveLength(1);
-  expect(env.ghCalls()).toEqual([]);
   const status = await env.run(["status"]);
   expect(status.stdout).toMatch(/^ {2}approved +bun\[\d+\].*acme\/widgets$/m);
 }
@@ -69,8 +66,11 @@ describe("session", () => {
     expect((await env.run(["session", "--repo", "acme/widgets"])).status).toBe(0);
     await approveSession(env);
     const next = await env.run(["gh", "-R", "acme/widgets", "issue", "list"]);
+    expect(next.status).toBe(0);
     expect(next.auth).toEqual([]);
+    expect(env.ghCalls()).toHaveLength(2);
     expect(env.accessLog().some((line) => line.includes("session approved"))).toBe(true);
+    expect(env.accessLog().filter((line) => /granted acme\/widgets \(session bun\[\d+\]\) as alice/.test(line))).toHaveLength(2);
   });
 
   test("a denied session approval leaves the session pending", async () => {
@@ -81,7 +81,7 @@ describe("session", () => {
     expect(denied.status).toBe(1);
     expect(denied.auth).toHaveLength(1);
     expect(env.ghCalls()).toEqual([]);
-    expect(env.mock.requests).toEqual([]);
+    expect(env.mock.scopedTokens()).toEqual([]);
     expect((await env.run(["status"])).stdout).toMatch(/^ {2}pending +bun/m);
     expect(env.accessLog().some((line) => line.includes("session not approved"))).toBe(true);
   });
@@ -97,7 +97,7 @@ describe("session", () => {
       expect(result.status).toBe(0);
       expect(result.auth).toHaveLength(1);
     }
-    const calls = env.ghCalls();
+    const calls = env.ghCalls().slice(1);
     expect(calls.map((call) => call.ghToken)).toEqual(["ghp_alice", "ghp_alice"]);
     expect(calls.every((call) => call.configDirEntries?.length === 0)).toBe(true);
   });
@@ -170,10 +170,12 @@ describe("status", () => {
     const result = await env.run(["status"]);
     expect(result.status).toBe(0);
     expect(result.auth).toEqual([]);
-    expect(result.stdout).toMatch(/^Apps \(owners\): acme, beta$/m);
+    expect(result.stdout).toMatch(
+      /^Apps \(owners\): acme \(signed in as alice\), beta \(not signed in: gh-touchid app login beta\)$/m,
+    );
     expect(result.stdout).toMatch(/^Accounts: alice, bob$/m);
     expect(result.stdout).toContain("No sessions or elevations.");
-    expect(result.stdout).not.toContain("ghp_");
+    expect(result.stdout).not.toMatch(/gh[pur]_/);
     expect(env.mock.requests).toEqual([]);
   });
 

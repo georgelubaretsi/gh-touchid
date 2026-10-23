@@ -40,14 +40,23 @@ func runGit(_ arguments: [String], showErrors: Bool = false) -> (status: Int32, 
     return (process.terminationStatus, data)
 }
 
-/// `owner/name` from a github.com URL (`https://github.com/o/r.git`, `git@github.com:o/r`), or nil.
+/// `owner/name` from a github.com URL (`https://github.com/o/r.git`, `git@github.com:o/r`), or nil. Test builds also
+/// take URLs on the mock API's host and port, where their Git remotes point.
 private func gitHubRepository(_ remote: String) -> String? {
     if remote.hasPrefix("git@github.com:") {
         return validRepository(String(remote.dropFirst("git@github.com:".count)))
     }
-    if let url = URL(string: remote), url.scheme != nil, url.host?.lowercased() == "github.com" {
+    guard let url = URL(string: remote), url.scheme != nil else {
+        return nil
+    }
+    if url.host?.lowercased() == "github.com" {
         return validRepository(url.path)
     }
+#if GH_TOUCHID_TESTING
+    if let base = try? apiBaseURL(), let mock = URL(string: base), url.host == mock.host, url.port == mock.port {
+        return validRepository(url.path)
+    }
+#endif
     return nil
 }
 

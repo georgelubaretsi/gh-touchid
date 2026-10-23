@@ -328,8 +328,11 @@ export class TestEnv {
     permissions?: Permissions;
     /** The repositories the installation covers (names under the owner); all by default. */
     installedOn?: string[];
-    /** The user token's remaining lifetime in seconds. */
+    /** The user token's remaining lifetime in seconds, and its refresh token's. */
     expiresIn?: number;
+    refreshExpiresIn?: number;
+    /** false: the App is stored, but nobody is signed in to it. */
+    signedIn?: boolean;
   }): { app: App; installation: Installation; token: Token } {
     const { owner, login } = options;
     if (owner.toLowerCase() !== login.toLowerCase()) {
@@ -343,15 +346,20 @@ export class TestEnv {
     for (const name of options.repositories ?? []) {
       this.mock.seedRepository(`${owner}/${name}`, { private: !(options.public ?? []).includes(name) });
     }
-    const token = this.mock.issueUserToken(app, login, { expiresIn: options.expiresIn });
-    this.seedApp(owner, { clientId: app.clientId, clientSecret: app.clientSecret, slug: app.slug });
-    this.seedSignIn(owner, {
-      login,
-      accessToken: token.token,
-      accessExpires: token.expiresAt!,
-      refreshToken: token.refreshToken!,
-      refreshExpires: token.refreshExpiresAt!,
+    const token = this.mock.issueUserToken(app, login, {
+      expiresIn: options.expiresIn,
+      refreshExpiresIn: options.refreshExpiresIn,
     });
+    this.seedApp(owner, { clientId: app.clientId, clientSecret: app.clientSecret, slug: app.slug });
+    if (options.signedIn !== false) {
+      this.seedSignIn(owner, {
+        login,
+        accessToken: token.token,
+        accessExpires: token.expiresAt!,
+        refreshToken: token.refreshToken!,
+        refreshExpires: token.refreshExpiresAt!,
+      });
+    }
     return { app, installation, token };
   }
 

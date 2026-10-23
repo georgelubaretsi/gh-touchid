@@ -103,6 +103,15 @@ export interface Revocation {
   at: number;
 }
 
+/** One request of Git's smart HTTP (`GET /{owner}/{repo}.git/info/refs`), with the Basic credentials it carried. */
+export interface GitLogin {
+  repository: string;
+  username?: string;
+  password?: string;
+  status: number;
+  at: number;
+}
+
 interface AuthorizationCode {
   code: string;
   clientId: string;
@@ -207,6 +216,8 @@ export class MockGitHub {
   readonly tokens: Token[] = [];
   /** Every DELETE /applications/{client_id}/token, with what it named. */
   readonly revocations: Revocation[] = [];
+  /** Every request of Git's smart HTTP, with the credentials Git sent. */
+  readonly gitLogins: GitLogin[] = [];
   readonly accounts = new Map<string, Account>();
   readonly apps: App[] = [];
   readonly installations: Installation[] = [];
@@ -471,6 +482,9 @@ export class MockGitHub {
     }
     if (method === "GET" && (match = path.match(/^\/apps\/([^/]+)\/installations\/new$/))) {
       return this.installPage(decodeURIComponent(match[1]!), url);
+    }
+    if (method === "GET" && (match = path.match(/^\/([^/]+)\/([^/]+?)(?:\.git)?\/info\/refs$/))) {
+      return this.gitInfoRefs(request, `${decodeURIComponent(match[1]!)}/${decodeURIComponent(match[2]!)}`);
     }
     return undefined;
   }
@@ -873,6 +887,44 @@ export class MockGitHub {
       repositories: repositories ? repositories.split(",").map((name) => `${target}/${name}`) : undefined,
     });
     return html(200, `Installed ${app.slug} on ${installation.account.login}.`);
+  }
+
+  /**
+   * Git's ref advertisement for an empty repository: 401 with a Basic challenge (so that Git asks its credential
+   * helper) unless the password is a live token that reaches the repository.
+   */
+  private gitInfoRefs(request: RecordedRequest, fullName: string): Response {
+    const match = (request.headers.authorization ?? "").match(/^Basic\s+(\S+)$/i);
+    const decoded = match ? Buffer.from(match[1]!, "base64").toString("utf8") : undefined;
+    const separator = decoded?.indexOf(":") ?? -1;
+    const username = decoded !== undefined && separator >= 0 ? decoded.slice(0, separator) : undefined;
+    const password = decoded !== undefined && separator >= 0 ? decoded.slice(separator + 1) : undefined;
+    const token = password ? this.findToken(password) : undefined;
+    const repository = this.repositories.get(fullName.toLowerCase());
+    const reaches =
+      token !== undefined &&
+      this.isLive(token) &&
+      repository !== undefined &&
+      (token.kind !== "scoped" ||
+        (token.repositories ?? []).some((name) => name.toLowerCase() === repository.fullName.toLowerCase()));
+    const status = reaches ? 200 : 401;
+    this.gitLogins.push({ repository: fullName, username, password, status, at: Date.now() });
+    if (!reaches) {
+      return new Response("Authentication required\n", {
+        status: 401,
+        headers: { "www-authenticate": 'Basic realm="GitHub"', "content-type": "text/plain" },
+      });
+    }
+    const line = (text: string) => (text.length + 4).toString(16).padStart(4, "0") + text;
+    const advertisement =
+      line("# service=git-upload-pack\n") +
+      "0000" +
+      line(`${"0".repeat(40)} capabilities^{}\0agent=mock-github\n`) +
+      "0000";
+    return new Response(advertisement, {
+      status: 200,
+      headers: { "content-type": "application/x-git-upload-pack-advertisement", "cache-control": "no-cache" },
+    });
   }
 }
 
