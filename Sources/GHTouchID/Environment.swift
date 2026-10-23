@@ -56,6 +56,21 @@ func webBaseURL() throws -> String {
 #endif
 }
 
+/// The port of the local page GitHub sends the browser back to after you authorize an App. It is fixed because GitHub
+/// matches an App's callback URLs exactly, port included (test builds: GH_TOUCHID_TEST_CALLBACK_PORT when set).
+let callbackPort: Int = {
+#if GH_TOUCHID_TESTING
+    if let port = ProcessInfo.processInfo.environment["GH_TOUCHID_TEST_CALLBACK_PORT"].flatMap(Int.init),
+       (1 ... 65535).contains(port) {
+        return port
+    }
+#endif
+    return 47911
+}()
+
+/// The callback URL every App of gh-touchid lists, and the one the sign-in asks GitHub to send the browser back to.
+let callbackURL = "http://127.0.0.1:\(callbackPort)/callback"
+
 /// Opens `url` in the default browser; test builds print `OPEN: <url>` instead.
 func openInBrowser(_ url: String) {
 #if GH_TOUCHID_TESTING

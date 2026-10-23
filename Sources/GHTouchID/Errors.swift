@@ -7,6 +7,8 @@ enum ToolError: Error, CustomStringConvertible {
     case missingRepository
     case missingAccount(String)
     case missingApp(String)
+    case legacyApp(owner: String, slug: String?)
+    case notSignedIn(String)
     case noApp(owner: String, logins: [String], program: String)
     case invalidToken
     case forbiddenCommand
@@ -38,6 +40,14 @@ enum ToolError: Error, CustomStringConvertible {
             return "no token is stored for the account \(login); run `gh-touchid user add \(login)` first"
         case let .missingApp(owner):
             return "no GitHub App is stored for \(owner); run `gh-touchid app create \(owner)` first"
+        case let .legacyApp(owner, slug):
+            let old = slug.map { "the old App \($0) (delete it in its settings on GitHub, under Advanced)" }
+                ?? "the old App"
+            return "the App stored for \(owner) comes from gh-touchid 0.3 or earlier, which acted as the App's bot; "
+                + "run `gh-touchid app create \(owner)` to make one that acts as you, then remove \(old)"
+        case let .notSignedIn(owner):
+            return "you are not signed in to the GitHub App for \(owner), or the sign-in has ended; "
+                + "run `gh-touchid app login \(owner)`"
         case let .noApp(owner, logins, program):
             let accounts = logins.isEmpty
                 ? "none stored yet; add one with `gh-touchid user add <login>`"
@@ -73,7 +83,8 @@ enum ToolError: Error, CustomStringConvertible {
     static let usageText = """
     Usage:
       gh-touchid app create <owner> [--name <name>] [--no-open]
-      gh-touchid app set <owner> --client-id <id> < private-key.pem
+      gh-touchid app set <owner> --client-id <id> [--no-open] < client-secret
+      gh-touchid app login <owner> [--no-open]
       gh-touchid user add <login>
       gh-touchid user remove <login>
       gh-touchid gh <arguments...>
@@ -86,11 +97,12 @@ enum ToolError: Error, CustomStringConvertible {
       gh-touchid lock
       gh-touchid version
 
-    `app create` makes a GitHub App for an owner from a manifest in your browser (--no-open prints the URL
-    instead) and stores it; `app set` stores one made by hand (client ID, PKCS#1 private key on stdin). Both
-    ask for Touch ID and check the key with GitHub. `gh` and Git then act as the owner's App with a
-    short-lived token limited to one repository and without the workflows permission; for an owner without
-    an App they refuse before asking for Touch ID.
+    `app create` makes a GitHub App for an owner from a manifest in your browser, signs you in to it and opens
+    its installation page (--no-open prints the URLs instead); `app set` takes an App made by hand (client ID,
+    client secret on stdin or hidden input; it must list the callback URL http://127.0.0.1:47911/callback) and
+    signs you in; `app login` signs you in again. Each asks for Touch ID before storing anything. `gh` and Git
+    then act as you, through the owner's App, with a token limited to one repository and without the
+    workflows permission; for an owner without an App they refuse before asking for Touch ID.
     `user add` stores a token of one of your GitHub accounts (hidden input or stdin) once GitHub confirms
     its login; `user remove` deletes it. `as` runs a command as that account, with Touch ID on every use:
     `as <login> gh ...` directly, anything else with GH_TOUCHID_AS=<login>, which gh and Git honour.

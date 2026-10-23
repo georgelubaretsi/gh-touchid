@@ -3,17 +3,28 @@ import Foundation
 import Security
 
 // Secrets live in the login Keychain as generic passwords (test builds: in files under GH_TOUCHID_TEST_DIR).
-// - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, privateKey},
-//   and its slug as the item's comment (none for Apps stored by earlier versions)
+// - service `com.lubaretsi.gh-touchid.app`, account = owner: the owner's GitHub App as JSON {clientId, clientSecret},
+//   and its slug as the item's comment (none for Apps stored by earlier versions). gh-touchid 0.3 and earlier stored
+//   {clientId, privateKey} here instead; such an item is refused, since its App would act as itself.
+// - service `com.lubaretsi.gh-touchid.signin`, account = owner: your sign-in to that App as JSON {login, accessToken,
+//   accessExpires, refreshToken, refreshExpires} (expiries in seconds since 1970), and the login as its comment
 // - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`
 // Accounts are lowercase. Items of gh-touchid 0.2 (service `com.lubaretsi.gh-touchid`) are no longer read.
 // gh's own sign-in, service `gh:github.com`, is only looked up, to tell whether another gh is signed in.
-// Listing, existence checks and the App's slug read attributes only, never a secret.
+// Listing, existence checks, the App's slug and the signed-in login read attributes only, never a secret.
 
 private let appService = "com.lubaretsi.gh-touchid.app"
+private let signInService = "com.lubaretsi.gh-touchid.signin"
 private let userService = "com.lubaretsi.gh-touchid.user"
 
+/// The owner's GitHub App as gh-touchid uses it: the OAuth client you sign in to, which narrows your tokens.
 struct AppCredentials: Codable {
+    let clientId: String
+    let clientSecret: String
+}
+
+/// What gh-touchid 0.3 and earlier stored for an App: its private key, with which the App acted as its own bot.
+private struct LegacyAppCredentials: Decodable {
     let clientId: String
     let privateKey: String
 }
@@ -29,10 +40,13 @@ func loadAppCredentials(owner: String) throws -> AppCredentials {
     guard let data = try loadSecret(service: appService, account: owner) else {
         throw ToolError.missingApp(owner)
     }
-    guard let credentials = try? JSONDecoder().decode(AppCredentials.self, from: data) else {
-        throw ToolError.keychain("the stored App for \(owner) is not valid; run `gh-touchid app set` again")
+    if let credentials = try? JSONDecoder().decode(AppCredentials.self, from: data) {
+        return credentials
     }
-    return credentials
+    if (try? JSONDecoder().decode(LegacyAppCredentials.self, from: data)) != nil {
+        throw ToolError.legacyApp(owner: owner, slug: appSlug(owner: owner))
+    }
+    throw ToolError.keychain("the stored App for \(owner) is not valid; run `gh-touchid app create \(owner)` again")
 }
 
 func hasAppCredentials(owner: String) -> Bool {
@@ -47,6 +61,42 @@ func appSlug(owner: String) -> String? {
 /// Owners with a stored App.
 func storedAppOwners() throws -> [String] {
     try storedAccounts(service: appService)
+}
+
+/// Your sign-in to an owner's App: an expiring user access token and the refresh token that renews it.
+struct SignIn: Codable {
+    let login: String
+    let accessToken: String
+    /// Seconds since 1970.
+    let accessExpires: TimeInterval
+    let refreshToken: String
+    /// Seconds since 1970.
+    let refreshExpires: TimeInterval
+}
+
+func storeSignIn(_ signIn: SignIn, owner: String) throws {
+    let data = try JSONEncoder().encode(signIn)
+    let label = "gh-touchid sign-in for \(owner)"
+    try storeSecret(data, service: signInService, account: owner, label: label, comment: signIn.login)
+}
+
+func loadSignIn(owner: String) throws -> SignIn {
+    guard let data = try loadSecret(service: signInService, account: owner) else {
+        throw ToolError.notSignedIn(owner)
+    }
+    guard let signIn = try? JSONDecoder().decode(SignIn.self, from: data) else {
+        throw ToolError.keychain("the stored sign-in for \(owner) is not valid; run `gh-touchid app login \(owner)`")
+    }
+    return signIn
+}
+
+func hasSignIn(owner: String) -> Bool {
+    hasSecret(service: signInService, account: owner)
+}
+
+/// The login signed in to the owner's App, read from its attributes; nil when nobody is.
+func signedInLogin(owner: String) -> String? {
+    secretComment(service: signInService, account: owner).flatMap(validOwner)
 }
 
 func storeUserToken(_ token: String, login: String) throws {

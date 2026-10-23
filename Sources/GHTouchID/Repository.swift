@@ -101,10 +101,11 @@ func repositoriesOption(_ options: [String: [String]]) throws -> [String] {
     return repositories
 }
 
-/// The repository a `gh` command is for: `-R`/`--repo`, else GH_REPO, else the current repository. gh's flag
-/// definitions are read only when a flag before the selector may take it as its value; when they cannot be read, only
-/// `-R`/`--repo` is known to take a value (a wrong guess only yields a token gh cannot use). With `exact`, for a token
-/// not limited to one repository (an account's), it refuses instead of guessing.
+/// The repository a `gh` command is for: `-R`/`--repo`, else for `gh api` the repository its endpoint names, else
+/// GH_REPO, else the current repository. gh's flag definitions are read only when a flag before the selector may take
+/// it as its value; when they cannot be read, only `-R`/`--repo` is known to take a value (a wrong guess only yields a
+/// token gh cannot use). With `exact`, for a token not limited to one repository (an account's), it refuses instead of
+/// guessing.
 func requestedRepository(_ arguments: [String], exact: Bool) throws -> String {
     var flags = CommandFlags()
     if repositorySelectorIsAmbiguous(arguments) {
@@ -119,6 +120,9 @@ func requestedRepository(_ arguments: [String], exact: Bool) throws -> String {
     }
     if let selector = try repositorySelector(arguments, flags: flags) {
         return try repositorySpecification(selector)
+    }
+    if let repository = apiEndpointRepository(arguments) {
+        return repository
     }
     if let repository = ProcessInfo.processInfo.environment["GH_REPO"], !repository.isEmpty {
         return try repositorySpecification(repository)
@@ -143,4 +147,57 @@ private func repositorySpecification(_ raw: String) throws -> String {
         }
     }
     throw ToolError.input("\(raw) is not a github.com repository (OWNER/REPO, HOST/OWNER/REPO or a github.com URL)")
+}
+
+/// `gh api`'s flags that take a value (gh 2.x: `-X`, `-H`, `-F`, `-f`, `--input`, `-q`, `-t`, `--hostname`, `--cache`,
+/// `-p`); the others are switches.
+private let apiValueFlags: (long: Set<String>, short: Set<Character>) = (
+    ["method", "header", "field", "raw-field", "input", "jq", "template", "hostname", "cache", "preview"],
+    ["X", "H", "F", "f", "q", "t", "p"]
+)
+
+/// For `gh api <endpoint>`: `OWNER/REPO` when the endpoint is `repos/OWNER/REPO[/…]`, with or without a leading slash
+/// or as a full URL of the API, and names them without `{owner}`/`{repo}` placeholders; nil otherwise, as for
+/// `graphql` or `user`, which gh resolves (or needs no repository for) on its own.
+func apiEndpointRepository(_ arguments: [String]) -> String? {
+    guard arguments.first == "api" else {
+        return nil
+    }
+    var endpoint: String?
+    var index = 1
+    while index < arguments.count {
+        let argument = arguments[index]
+        if argument == "--" {
+            endpoint = index + 1 < arguments.count ? arguments[index + 1] : nil
+            break
+        }
+        if argument.hasPrefix("--") {
+            let name = String(argument.dropFirst(2).prefix { $0 != "=" })
+            index += !argument.contains("=") && apiValueFlags.long.contains(name) ? 2 : 1
+        } else if argument.count > 1, argument.hasPrefix("-") {
+            let shorthand = argument[argument.index(after: argument.startIndex)]
+            index += argument.count == 2 && apiValueFlags.short.contains(shorthand) ? 2 : 1
+        } else {
+            endpoint = argument
+            break
+        }
+    }
+    guard var path = endpoint, !path.contains("{") else {
+        return nil
+    }
+    if path.contains("://") {
+        guard let url = URLComponents(string: path), let base = try? apiBaseURL(),
+              let api = URLComponents(string: base), url.host?.lowercased() == api.host?.lowercased() else {
+            return nil
+        }
+        path = url.path
+    }
+    if let query = path.firstIndex(of: "?") {
+        path = String(path[..<query])
+    }
+    let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+    guard parts.count >= 3, parts[0] == "repos" else {
+        return nil
+    }
+    return validRepository("\(parts[1])/\(parts[2])")
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-// Synchronous calls to the GitHub REST API; nothing is cached or stored.
+// Synchronous calls to the GitHub REST API and to GitHub's OAuth endpoints; nothing is cached or stored.
 
 struct APIResponse {
     let status: Int
@@ -31,11 +31,13 @@ private final class ResponseBox: @unchecked Sendable {
     var error: Error?
 }
 
-/// One request to the GitHub API, with `bearer` as the credential when there is one.
+/// One request to the GitHub API, with `bearer` as the credential when there is one, or else an App's client ID and
+/// secret (`basic`, for the endpoints under `/applications/{client_id}`).
 func githubAPI(
     _ method: String,
     _ path: String,
     bearer: String?,
+    basic app: AppCredentials? = nil,
     body: [String: Any]? = nil
 ) throws -> APIResponse {
     guard let url = URL(string: try apiBaseURL() + path) else {
@@ -45,15 +47,36 @@ func githubAPI(
     request.httpMethod = method
     request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
     request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-    request.setValue("gh-touchid", forHTTPHeaderField: "User-Agent")
     if let bearer {
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+    } else if let app {
+        let pair = Data("\(app.clientId):\(app.clientSecret)".utf8).base64EncodedString()
+        request.setValue("Basic \(pair)", forHTTPHeaderField: "Authorization")
     }
     if let body {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
+    return try send(request, label: "\(method) \(path)")
+}
 
+/// `POST` to one of GitHub's OAuth endpoints on its web host (`/login/oauth/access_token`), which answers in JSON and
+/// reports refusals as an `error` field, often with HTTP 200.
+func githubOAuth(_ path: String, fields: [String: String]) throws -> APIResponse {
+    guard let url = URL(string: try webBaseURL() + path) else {
+        throw ToolError.github("cannot build the URL for \(path)")
+    }
+    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try JSONSerialization.data(withJSONObject: fields)
+    return try send(request, label: "POST \(path)")
+}
+
+private func send(_ original: URLRequest, label: String) throws -> APIResponse {
+    var request = original
+    request.setValue("gh-touchid", forHTTPHeaderField: "User-Agent")
     let configuration = URLSessionConfiguration.ephemeral
     configuration.timeoutIntervalForRequest = 30
     configuration.timeoutIntervalForResource = 30
@@ -72,10 +95,10 @@ func githubAPI(
     semaphore.wait()
 
     if let error = box.error {
-        throw ToolError.github("cannot reach GitHub (\(method) \(path)): \(error.localizedDescription)")
+        throw ToolError.github("cannot reach GitHub (\(label)): \(error.localizedDescription)")
     }
     guard let response = box.response as? HTTPURLResponse else {
-        throw ToolError.github("GitHub sent no HTTP response to \(method) \(path)")
+        throw ToolError.github("GitHub sent no HTTP response to \(label)")
     }
     var headers: [String: String] = [:]
     for case let (name as String, value as String) in response.allHeaderFields {

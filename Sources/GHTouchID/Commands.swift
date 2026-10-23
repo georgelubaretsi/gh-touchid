@@ -61,47 +61,78 @@ func run() throws -> Int32 {
     }
 }
 
-/// `app create <owner> [--name <name>] [--no-open]`, or `app set <owner> --client-id <id>` with the PKCS#1 key on
-/// stdin.
+/// `app create <owner> [--name <name>] [--no-open]`, `app set <owner> --client-id <id> [--no-open]` with the client
+/// secret on stdin (or typed, hidden), or `app login <owner> [--no-open]`.
 private func appCommand(_ arguments: [String]) throws -> Int32 {
     guard arguments.count >= 2, let owner = validOwner(arguments[1]) else {
         throw ToolError.usage
     }
+    var options = Array(arguments.dropFirst(2))
+    let open = !options.contains("--no-open")
+    options.removeAll { $0 == "--no-open" }
     switch arguments[0] {
     case "create":
-        var options = Array(arguments.dropFirst(2))
-        let open = !options.contains("--no-open")
-        options.removeAll { $0 == "--no-open" }
         let names = try parseOptions(options, allowed: ["--name"])["--name"] ?? ["\(owner)-agent"]
         guard names.count == 1, let name = names.first, !name.isEmpty, printable(name, limit: 100) == name else {
             throw ToolError.input("--name takes one App name")
         }
         return try createApp(owner: owner, name: name, openBrowser: open)
     case "set":
-        return try setApp(owner: owner, Array(arguments.dropFirst(2)))
+        return try setApp(owner: owner, options, openBrowser: open)
+    case "login":
+        guard options.isEmpty else {
+            throw ToolError.usage
+        }
+        return try appLogin(owner: owner, openBrowser: open)
     default:
         throw ToolError.usage
     }
 }
 
-private func setApp(owner: String, _ arguments: [String]) throws -> Int32 {
+/// An App made by hand: its client ID, and its client secret from stdin or hidden input. It must list the callback
+/// URL; the sign-in that follows is what checks the secret, and one Touch ID stores both.
+private func setApp(owner: String, _ arguments: [String], openBrowser: Bool) throws -> Int32 {
     let options = try parseOptions(arguments, allowed: ["--client-id"])
     guard let values = options["--client-id"], values.count == 1,
           let clientId = values.first, !clientId.isEmpty,
           clientId.unicodeScalars.allSatisfy({ (0x21 ... 0x7E).contains($0.value) }) else {
         throw ToolError.input("app set needs --client-id with the App's client ID")
     }
-    guard isatty(STDIN_FILENO) == 0 else {
-        throw ToolError.input("pipe the App's private key in: gh-touchid app set \(owner) --client-id \(clientId) < key.pem")
+    let app = AppCredentials(clientId: clientId, clientSecret: try readToken(prompt: "Client secret: "))
+    let server = try LocalServer(port: callbackPort)
+    let request = try signInRequest(app: app)
+    fputs(
+        "The App must list \(callbackURL) as a callback URL. To sign in to it, open \(request.url) and choose "
+            + "Authorize (waiting up to 15 minutes).\n",
+        stderr
+    )
+    if openBrowser {
+        openInBrowser(request.url)
     }
-    let pem = try readStandardInputText().trimmingCharacters(in: .whitespacesAndNewlines)
-    let key = try rsaPrivateKey(pem: pem)
-    try authenticate(.appKey(owner: owner))
-    let app = try verifyAppKey(clientId: clientId, key: key)
-    try storeAppCredentials(AppCredentials(clientId: clientId, privateKey: pem), owner: owner, slug: app.slug)
-    fputs("Stored the key of the GitHub App \(app.name) for \(owner); GitHub accepted it.\n", stderr)
-    // Git compares a URL's owner case-sensitively: write it as GitHub does
-    try offerGitSetup(owner: app.owner.flatMap { $0.lowercased() == owner ? $0 : nil } ?? owner)
+    let (signIn, browser) = try awaitSignIn(
+        request,
+        app: app,
+        owner: owner,
+        server: server,
+        deadline: Date().addingTimeInterval(signInTimeout)
+    )
+    defer { close(browser) }
+    let slug = installedAppSlug(token: signIn.accessToken)
+    do {
+        try authenticate(.signIn(signIn.login, owner: owner, app: slug, storesApp: true))
+        try storeAppCredentials(app, owner: owner, slug: slug)
+        try storeSignIn(signIn, owner: owner)
+    } catch {
+        respond(browser, status: 200, text: "Nothing was stored: \(error)")
+        throw error
+    }
+    respond(browser, status: 200, text: "Signed in as \(signIn.login). You can close this tab.")
+    appendAccessLog("stored the \(owner) App\(slug.map { " \($0)" } ?? "") and signed in as \(signIn.login)")
+    fputs("Stored \(appWords(slug, owner: owner)) for \(owner) and signed you in to it as \(signIn.login).\n", stderr)
+    if slug == nil {
+        fputs("It is not installed anywhere you can see yet: install it on \(owner) from its settings page.\n", stderr)
+    }
+    try offerGitSetup(owner: owner)
     return 0
 }
 
@@ -242,7 +273,7 @@ private func registerSession(_ arguments: [String]) throws -> Int32 {
     return 0
 }
 
-/// `elevate --for <duration> [--repo <owner/name>]...`: App tokens for these repositories include workflows.
+/// `elevate --for <duration> [--repo <owner/name>]...`: tokens for these repositories include workflows.
 private func elevate(_ arguments: [String]) throws -> Int32 {
     let options = try parseOptions(arguments, allowed: ["--for", "--repo"])
     guard let durations = options["--for"], durations.count == 1 else {
@@ -266,7 +297,10 @@ private func elevate(_ arguments: [String]) throws -> Int32 {
 private func showStatus() throws -> Int32 {
     let owners = try storedAppOwners()
     let logins = try storedUserLogins()
-    print("Apps (owners): \(owners.isEmpty ? "none" : owners.joined(separator: ", "))")
+    let apps = owners.map { owner in
+        "\(owner) (\(signedInLogin(owner: owner).map { "signed in as \($0)" } ?? "not signed in: gh-touchid app login \(owner)"))"
+    }
+    print("Apps (owners): \(apps.isEmpty ? "none" : apps.joined(separator: ", "))")
     print("Accounts: \(logins.isEmpty ? "none" : logins.joined(separator: ", "))")
     gitStatus(owners: owners).forEach { print($0) }
     let reply = agentRequest(["op": "status"])

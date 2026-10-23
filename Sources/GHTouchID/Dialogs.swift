@@ -55,8 +55,8 @@ struct Use {
 }
 
 extension Prompt {
-    /// One use of an App token outside any session; `app` is the App's slug when it is known.
-    static func appUse(by requester: Requester, use: Use, repository: String, app: String?) -> Prompt {
+    /// One use of a token outside any session, acting as `login` through the App `app` (each nil when not stored).
+    static func appUse(by requester: Requester, use: Use, repository: String, app: String?, login: String?) -> Prompt {
         var rows = [
             Row(key: "action", value: actionWords(use.command), emphasis: .strong),
             Row(key: "repo", value: repository, emphasis: .strong),
@@ -72,7 +72,7 @@ extension Prompt {
         }
         rows += [
             Row(key: "from", value: requester.from),
-            Row(key: "as", value: botWords(app, owner: ownerAccount(repository))),
+            Row(key: "as", value: actingWords(login, app: app, owner: ownerAccount(repository))),
             Row(key: "scope", value: "once", emphasis: .warning),
         ]
         return Prompt(
@@ -103,7 +103,13 @@ extension Prompt {
     }
 
     /// A use of an issue-only token for a public repository outside the session, by the session's program.
-    static func publicIssue(by requester: Requester, use: Use, repository: String, app: String?) -> Prompt {
+    static func publicIssue(
+        by requester: Requester,
+        use: Use,
+        repository: String,
+        app: String?,
+        login: String?
+    ) -> Prompt {
         var rows = [
             Row(key: "action", value: issueActionWords(use.command), emphasis: .strong),
             Row(key: "repo", value: repository, emphasis: .strong),
@@ -117,7 +123,7 @@ extension Prompt {
         }
         rows += [
             Row(key: "from", value: requester.from),
-            Row(key: "as", value: botWords(app, owner: ownerAccount(repository))),
+            Row(key: "as", value: actingWords(login, app: app, owner: ownerAccount(repository))),
             Row(key: "scope", value: "once", emphasis: .warning),
         ]
         return Prompt(
@@ -164,11 +170,11 @@ extension Prompt {
         )
     }
 
-    /// `app create`: the App GitHub just made.
+    /// `app create` when the sign-in did not finish: the App GitHub just made, stored alone.
     static func newApp(_ slug: String, owner: String) -> Prompt {
         Prompt(
             rows: [
-                Row(key: "action", value: "store app key", emphasis: .strong),
+                Row(key: "action", value: "store app", emphasis: .strong),
                 Row(key: "owner", value: owner, emphasis: .strong),
                 Row(key: "app", value: slug),
                 Row(key: "scope", value: "until removed", emphasis: .warning),
@@ -178,16 +184,26 @@ extension Prompt {
         )
     }
 
-    /// `app set`: asked before GitHub is, so the App's name is not known yet.
-    static func appKey(owner: String) -> Prompt {
-        Prompt(
-            rows: [
-                Row(key: "action", value: "store app key", emphasis: .strong),
-                Row(key: "owner", value: owner, emphasis: .strong),
-                Row(key: "scope", value: "until removed", emphasis: .warning),
-            ],
+    /// `app login`, and the end of `app create` and `app set` (`storesApp`): your sign-in to the owner's App.
+    static func signIn(_ login: String, owner: String, app: String?, storesApp: Bool) -> Prompt {
+        var rows = [
+            Row(key: "action", value: storesApp ? "store app and sign in" : "sign in", emphasis: .strong),
+            Row(key: "owner", value: owner, emphasis: .strong),
+        ]
+        if let app {
+            rows.append(Row(key: "app", value: app))
+        }
+        rows += [
+            Row(key: "as", value: "\(login) (your account)", emphasis: .strong),
+            Row(key: "scope", value: "until removed", emphasis: .warning),
+        ]
+        let what = app.map { "the GitHub App \($0)" } ?? "the GitHub App"
+        return Prompt(
+            rows: rows,
             allowLabel: "allow",
-            fallback: "store the GitHub App key for \(owner)"
+            fallback: storesApp
+                ? "store \(what) for \(owner) and sign in to it as \(login)"
+                : "sign in to \(what) for \(owner) as \(login)"
         )
     }
 
@@ -243,9 +259,9 @@ private func issueActionWords(_ command: String) -> String {
     }
 }
 
-/// `acme-agent (bot)`, or `acme's app (bot)` when the App's slug is not stored.
-private func botWords(_ slug: String?, owner: String) -> String {
-    "\(slug ?? "\(owner)'s app") (bot)"
+/// `octocat via acme-agent`: you act through the App; `you via acme's app` when the login or slug is not stored.
+private func actingWords(_ login: String?, app slug: String?, owner: String) -> String {
+    "\(login ?? "you") via \(slug ?? "\(owner)'s app")"
 }
 
 /// One repository per line, the owner only on the first when all share it; every repository is listed.
