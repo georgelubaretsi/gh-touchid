@@ -414,7 +414,9 @@ The scope and any risk are in orange. Nothing is shortened: every repository, th
 given with `--body-file`) and the command are shown. A value too tall for the window scrolls in a box that says how
 many lines it has.
 
-- To allow, touch the sensor. Its control sits beside what you allow, such as "allow once".
+- To allow, touch the sensor. Its control sits beside what you allow, such as "allow once". The window goes as soon
+  as Touch ID answers, also when the command goes on afterwards, such as `reader create` waiting for the browser or a
+  long gh command.
 - To deny, press Esc or click **deny**.
 - After five minutes without an answer, the window closes and the command fails.
 - While the screen is locked, nobody can answer. The command fails at once with "the screen is locked, so nobody could
