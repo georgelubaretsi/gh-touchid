@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# Builds gh-touchid with Xcode's Swift compiler: arm64 and x86_64, joined into one universal executable. The release
-# workflow and the flake's source build both call this script; it is the only place the compiler flags live.
+# Builds gh-touchid with Xcode's Swift compiler: arm64 and x86_64, joined into one universal executable; and beside it
+# gh-touchid-adapter, the program `gh-touchid rpc|mcp` runs, with SwiftPM from Package.swift and the versions pinned in
+# Package.resolved (it uses the MCP Swift SDK; gh-touchid itself links no third-party code). The release workflow and
+# the flake's source build both call this script; it is the only place the compiler flags live.
 #
-#   scripts/build.sh --output FILE [--xcode PATH] [--xcode-version VERSION]
+#   scripts/build.sh --output FILE [--adapter-output FILE | --no-adapter] [--xcode PATH] [--xcode-version VERSION]
 #                    [--gh PATH --gh-sha256 SHA256 [--gh-cdhash ARCH=CDHASH]...] [--known-releases FILE]
 #                    [--testing [--testing-version VERSION]]
 #
 #   --output           where to write the executable
+#   --adapter-output   where to write gh-touchid-adapter (default: gh-touchid-adapter in the folder of --output, where
+#                      a development or test build looks for it); a release puts it in libexec/gh-touchid/
+#   --no-adapter       build gh-touchid only
 #   --xcode            the Xcode to build with (default /Applications/Xcode.app)
 #   --xcode-version    refuse any other Xcode version, e.g. 27.0; an Xcode older than 26.0 is always refused
 #   --gh               the GitHub CLI gh-touchid runs: an absolute path, or one relative to the folder of
@@ -22,8 +27,9 @@
 #   --testing-version  with --testing only: the version the test build states instead of toolVersion, e.g. 0.4.0,
 #                      for tests of one version meeting another
 #
-# Without --gh the result is a development build, which runs GH_TOUCHID_GH or the gh on PATH. Without
-# --known-releases the build knows no earlier release.
+# Without --gh the result is a development build, which runs GH_TOUCHID_GH or the gh on PATH, and GH_TOUCHID_ADAPTER
+# or the gh-touchid-adapter beside it. Without --known-releases the build knows no earlier release. SwiftPM keeps its
+# checkouts and builds in .build/ of the checkout, and fetches the pinned packages from GitHub the first time.
 set -euo pipefail
 
 # The oldest Xcode, and the oldest macOS gh-touchid runs on.
@@ -35,6 +41,8 @@ fail() {
 }
 
 output=
+adapter_output=
+adapter=1
 xcode=/Applications/Xcode.app
 xcode_version=
 gh=
@@ -45,10 +53,12 @@ testing=
 testing_version=
 while [ $# -gt 0 ]; do
   case "$1" in
-    --output | --xcode | --xcode-version | --gh | --gh-sha256 | --gh-cdhash | --known-releases | --testing-version)
+    --output | --adapter-output | --xcode | --xcode-version | --gh | --gh-sha256 | --gh-cdhash | --known-releases | \
+      --testing-version)
       [ $# -ge 2 ] || fail "$1 needs a value"
       case "$1" in
         --output) output=$2 ;;
+        --adapter-output) adapter_output=$2 ;;
         --xcode) xcode=$2 ;;
         --xcode-version) xcode_version=$2 ;;
         --gh) gh=$2 ;;
@@ -63,11 +73,17 @@ while [ $# -gt 0 ]; do
       testing=1
       shift
       ;;
+    --no-adapter)
+      adapter=
+      shift
+      ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
 [ -n "$output" ] || fail "--output is required"
+[ -n "$adapter" ] || [ -z "$adapter_output" ] || fail "--adapter-output and --no-adapter exclude each other"
+[ -n "$adapter_output" ] || adapter_output="$(dirname "$output")/gh-touchid-adapter"
 path_pattern='^[A-Za-z0-9._+/-]+$'
 sha256_pattern='^[0-9a-f]{64}$'
 cdhashes_pattern='^(arm64|x86_64)=[0-9a-f]{40}(,(arm64|x86_64)=[0-9a-f]{40})*$'
@@ -177,3 +193,21 @@ for architecture in arm64 x86_64; do
 done
 mkdir -p "$(dirname "$output")"
 /usr/bin/xcrun lipo -create -output "$output" "$work/gh-touchid-arm64" "$work/gh-touchid-x86_64"
+
+[ -n "$adapter" ] || exit 0
+# gh-touchid-adapter, one slice per architecture as above. `--force-resolved-versions`: exactly the versions in
+# Package.resolved, or fail. `--disable-sandbox` and `-disable-sandbox`: SwiftPM compiles the manifest, and swiftc runs
+# macro plugins, under sandbox-exec otherwise, which fails as a Nix build user. The triple names the oldest macOS, as
+# -target does above. SwiftPM writes every triple's product to the same path, so each slice is copied out before the
+# next build replaces it.
+adapter_slices=()
+for architecture in arm64 x86_64; do
+  swiftpm=(--package-path "$root" -c release --product gh-touchid-adapter --triple "$architecture-apple-macosx$minimum"
+    --force-resolved-versions --disable-sandbox -Xswiftc -disable-sandbox -Xlinker -adhoc_codesign)
+  /usr/bin/xcrun --sdk macosx swift build "${swiftpm[@]}"
+  cp "$(/usr/bin/xcrun --sdk macosx swift build "${swiftpm[@]}" --show-bin-path)/gh-touchid-adapter" \
+    "$work/gh-touchid-adapter-$architecture"
+  adapter_slices+=("$work/gh-touchid-adapter-$architecture")
+done
+mkdir -p "$(dirname "$adapter_output")"
+/usr/bin/xcrun lipo -create -output "$adapter_output" "${adapter_slices[@]}"

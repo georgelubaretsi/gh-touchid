@@ -1,5 +1,5 @@
 // Signing in to an owner's App through the browser: `app create` (manifest, then sign-in, in one trip), `app login`
-// and `app set`. The browser is the harness's driver; GitHub's pages are the mock's.
+// and `app add`. The browser is the harness's driver; GitHub's pages are the mock's.
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -173,7 +173,7 @@ describe("app login", () => {
   });
 });
 
-describe("app set", () => {
+describe("app add", () => {
   function seedHandMadeApp(env: TestEnv) {
     seedOrganization(env);
     const app = env.mock.seedApp("acme", { slug: "acme-tools", callbackUrls: [env.callbackUrl] });
@@ -184,7 +184,7 @@ describe("app set", () => {
   test("signs in with the client secret from stdin and stores the App (slug from its installation) and the sign-in", async () => {
     await using env = await TestEnv.create();
     const app = seedHandMadeApp(env);
-    const { result } = await withBrowser(env, ["app", "set", "acme", "--client-id", app.clientId], {
+    const { result } = await withBrowser(env, ["app", "add", "acme", "--client-id", app.clientId], {
       stdin: `${app.clientSecret}\n`,
     });
     expect(result.status).toBe(0);
@@ -199,7 +199,7 @@ describe("app set", () => {
   test("a wrong client secret stores nothing", async () => {
     await using env = await TestEnv.create();
     const app = seedHandMadeApp(env);
-    const { browser, result } = await withBrowser(env, ["app", "set", "acme", "--client-id", app.clientId], {
+    const { browser, result } = await withBrowser(env, ["app", "add", "acme", "--client-id", app.clientId], {
       stdin: "not-the-secret\n",
     });
     expect(result.status).toBe(1);

@@ -16,7 +16,10 @@ parts the change touches:
 
 | If the change touches | Check that |
 | --- | --- |
-| `Access.swift` | each access rule still asks Touch ID or checks the session before a token is minted; acting as an account asks every time; refusals that need no dialog come before it; every outcome is logged |
+| `Access.swift` | each access rule still asks Touch ID or checks the session before a token is minted, except the reader, which mints only after the issue check; acting as an account asks every time; refusals that need no dialog come before it; every outcome is logged |
+| `Reader.swift`, `IssueCheck.swift`, `JWT.swift` | a reader token is used only when GitHub reports no permissions, `repository_selection` `selected` and no repositories, and is revoked otherwise; it goes to the pinned gh only, never to Git; the issue check runs before any token is minted and refuses what it cannot read; the notice is printed on every use; the App's key is read only to sign, never printed or logged |
+| `Operations.swift`, `Schema.swift` | input is checked against the schema before anything is done; secret fields come only from stdin and never appear in output, errors or `--help --json` examples; `--json` errors carry a stable code |
+| `AdapterLaunch.swift`, `Sources/GHTouchIDAdapter/`, `Package.swift`, `Package.resolved` | the adapter holds no secrets, never reads the Keychain or the agent socket, and refuses tools with a secret input; its dependencies are pinned to exact versions and reviewed; the core target has none; only development and test builds honour `GH_TOUCHID_ADAPTER` |
 | `GitHubApp.swift` | a handed-out token names one repository; `workflows` only when elevated at mint time; the sign-in's own token never leaves; renewal and reads happen under the owner's lock; replies holding tokens never reach an error |
 | `SignIn.swift`, `LocalServer.swift`, `AppManifest.swift` | callbacks need this attempt's `state`; PKCE is sent and checked; Touch ID comes before anything is stored; failures say truthfully what was stored; the manifest page is not served after an App was made |
 | `GitHubCLI.swift` | only the pinned gh runs with a token (SHA-256, and cdhash before it runs); `GH_TOKEN` goes only to it, with a fresh `GH_CONFIG_DIR`; token-revealing commands stay refused; signals are passed on and the token is still revoked |
@@ -35,8 +38,8 @@ against a mock GitHub, with no Touch ID and no Keychain.
 
 | Severity | Examples |
 | --- | --- |
-| Critical | a token, client secret or refresh token reaching a program, log, file or web page outside the documented paths (the pinned gh's `GH_TOKEN`, which the programs gh starts inherit while it runs, and Git's credential pipe to its HTTPS transport); a token handed out without Touch ID or a covering session; gh-touchid handing a token to any program but the pinned gh or Git's transport |
-| High | a token for more than one repository, or with `workflows` when not elevated; a `gh` token not revoked after gh exits; a session approved or elevated by a peer that is not this executable; a sign-in callback accepted without this attempt's `state` |
+| Critical | a token, client secret, refresh token or the reader's key reaching a program, log, file or web page outside the documented paths (the pinned gh's `GH_TOKEN`, which the programs gh starts inherit while it runs, and Git's credential pipe to its HTTPS transport); a token other than a reader token handed out without Touch ID or a covering session; a reader token minted while its App has permissions or repositories; gh-touchid handing a token to any program but the pinned gh or Git's transport; a secret accepted through `rpc` or `mcp` parameters |
+| High | a token for more than one repository, or with `workflows` when not elevated; a `gh` token not revoked after gh exits; a reader token reaching Git; a command that opens an issue getting a reader token; a session approved or elevated by a peer that is not this executable; a sign-in callback accepted without this attempt's `state` |
 | Medium | a dialog naming a different repository, command or identity than the token is for; a refused or failed flow leaving a secret stored, or saying it stored nothing when it did; a refusal that should come before a dialog coming after it |
 | Low | an access-log line missing or wrong; a misleading message that does not change what is granted |
 

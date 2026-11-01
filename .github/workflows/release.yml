@@ -1,8 +1,8 @@
 # Builds the release tarball and checks it and its Homebrew formula on pull requests that touch what goes into them,
-# and on version tags; a tag also signs gh-touchid with the Developer ID and the hardened runtime, has Apple notarize
-# it, checks the signed tarball again, and publishes it: the GitHub release, the formula in
-# georgelubaretsi/homebrew-tap, and on main the Nix pin in release/nix.json and the release's cdhashes in
-# release/known-releases. Pull requests build ad hoc signed only.
+# and on version tags; a tag also signs gh-touchid and gh-touchid-adapter with the Developer ID and the hardened
+# runtime, has Apple notarize them, checks the signed tarball again, and publishes it: the GitHub release, the formula
+# in georgelubaretsi/homebrew-tap, and on main the Nix pin in release/nix.json and gh-touchid's cdhashes in
+# release/known-releases (never the adapter's: no release trusts it). Pull requests build ad hoc signed only.
 name: Release
 
 on:
@@ -12,6 +12,7 @@ on:
       - scripts/**
       - release/**
       - Package.swift
+      - Package.resolved
       - flake.nix
       - flake.lock
       - justfile
@@ -85,9 +86,10 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # Tags only: gh-touchid signed with the Developer ID and the hardened runtime, notarized, and the tarball repacked
-  # around it (scripts/sign.sh); GitHub's gh inside stays as GitHub signed it. The certificate and the notary key are
-  # secrets of the release environment, which only v* tags reach, and only the signing step sees them.
+  # Tags only: gh-touchid and gh-touchid-adapter signed with the Developer ID and the hardened runtime, notarized, and
+  # the tarball repacked around them (scripts/sign.sh); GitHub's gh inside stays as GitHub signed it. The certificate
+  # and the notary key are secrets of the release environment, which only v* tags reach, and only the signing step
+  # sees them.
   sign:
     name: Sign and notarize gh-touchid
     needs: build
@@ -132,7 +134,8 @@ jobs:
       - name: Check the signed tarball
         run: scripts/check-tarball.sh dist/gh-touchid-*-macos.tar.gz "${GITHUB_REF_NAME#v}"
 
-      # Read here, because publish runs on Linux, without codesign.
+      # Read here, because publish runs on Linux, without codesign. Only gh-touchid's: the adapter is never a known
+      # release.
       - name: Read the signed gh-touchid's cdhashes
         id: cdhashes
         run: |

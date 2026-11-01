@@ -3,9 +3,11 @@
 // every token it issues or revokes so that tests can assert on them. Nothing here talks to github.com.
 //
 // Deliberate strictness beyond GitHub: the OAuth authorize page refuses a request without a PKCE challenge (gh-touchid
-// always sends one), and refreshing a user token revokes the access token it replaces.
+// always sends one), and refreshing a user token revokes the access token it replaces. App JWTs (the reader's) are
+// verified as GitHub does: RS256 with one of the App's keys, `iss` its ID, `exp` in the future and at most ten minutes
+// after `iat`.
 
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes, verify } from "node:crypto";
 
 export type Permissions = Record<string, string>;
 
@@ -23,10 +25,13 @@ export interface App {
   name: string;
   clientId: string;
   clientSecret: string;
-  pem: string;
   owner: Account;
   /** What the App asks for when installed (the manifest's `default_permissions`). */
   permissions: Permissions;
+  /** The private key a manifest conversion hands out (PKCS#1 PEM); also in `keys`. */
+  pem: string;
+  /** Every private key GitHub accepts for the App's JWTs (PKCS#1 PEM); a key added on GitHub joins them. */
+  keys: string[];
   /** The OAuth callback URLs an authorize request's `redirect_uri` must equal. */
   callbackUrls: string[];
   /** The manifest's `redirect_url`, kept for inspection. */
@@ -51,7 +56,7 @@ export interface Repository {
   private: boolean;
 }
 
-export type TokenKind = "personal" | "user" | "scoped";
+export type TokenKind = "personal" | "user" | "scoped" | "installation";
 
 export interface Token {
   token: string;
@@ -71,11 +76,17 @@ export interface Token {
   target?: string;
   repositories?: string[];
   permissions?: Permissions;
+  /** For an `installation` token: the installation it acts as, and its App's ID. */
+  installationId?: number;
+  appId?: number;
   issuedAt: number;
   revoked: boolean;
   revokedAt?: number;
-  /** Why it was revoked: `deleted` (DELETE /applications/{client_id}/token) or `refreshed`. */
-  revokedBy?: "deleted" | "refreshed";
+  /**
+   * Why it was revoked: `deleted` (DELETE /applications/{client_id}/token or /installation/token), `refreshed`, or
+   * `grant` (DELETE /applications/{client_id}/grant).
+   */
+  revokedBy?: "deleted" | "refreshed" | "grant";
   /** For a `user` token: whether its refresh token was spent. */
   refreshUsed?: boolean;
 }
@@ -99,6 +110,14 @@ export interface Revocation {
   token: string;
   kind: TokenKind | "unknown";
   clientId: string;
+  status: number;
+  at: number;
+}
+
+/** One DELETE /applications/{client_id}/grant, with the access token it named. */
+export interface GrantRevocation {
+  clientId: string;
+  token: string;
   status: number;
   at: number;
 }
@@ -209,6 +228,30 @@ function appPrivateKey(): string {
   return rsaKey;
 }
 
+/** A new PKCS#1 RSA key, for an App that needs its own: the reader's, or a second key added to an App. */
+export function newPrivateKey(): string {
+  return generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs1", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+}
+
+/** The fingerprint GitHub shows for a key: `SHA256:` and the base64 SHA-256 of its public key's SPKI DER. */
+export function keyFingerprint(pem: string): string {
+  const der = createPublicKey(pem).export({ type: "spki", format: "der" });
+  return `SHA256:${createHash("sha256").update(der).digest("base64")}`;
+}
+
+function base64urlJSON(part: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return value && typeof value === "object" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class MockGitHub {
   /** Every request, in order of arrival. */
   readonly requests: RecordedRequest[] = [];
@@ -216,6 +259,10 @@ export class MockGitHub {
   readonly tokens: Token[] = [];
   /** Every DELETE /applications/{client_id}/token, with what it named. */
   readonly revocations: Revocation[] = [];
+  /** Every DELETE /applications/{client_id}/grant. */
+  readonly grantRevocations: GrantRevocation[] = [];
+  /** Every App JWT that came with a request, decoded, and whether it was accepted. */
+  readonly jwts: { header: Record<string, unknown>; payload: Record<string, unknown>; accepted: boolean }[] = [];
   /** Every request of Git's smart HTTP, with the credentials Git sent. */
   readonly gitLogins: GitLogin[] = [];
   readonly accounts = new Map<string, Account>();
@@ -234,6 +281,10 @@ export class MockGitHub {
   tokenReply: "expiring" | "non-expiring" = "expiring";
   /** The owner a manifest's App is made for, instead of the account whose settings page got the form. */
   manifestOwner?: string;
+  /** The permissions a manifest's App gets, instead of its `default_permissions` (as if edited on GitHub's page). */
+  manifestPermissions?: Permissions;
+  /** true: every App JWT is answered 401, as for a key deleted on GitHub. */
+  rejectJWTs = false;
 
   private readonly overrides: Override[] = [];
   private readonly manifestCodes = new Map<string, { app: App; used: boolean }>();
@@ -307,20 +358,25 @@ export class MockGitHub {
     return repository;
   }
 
-  /** An App of `owner` (made a User when unknown), as if made from a manifest. */
+  /**
+   * An App of `owner` (made a User when unknown), as if made from a manifest. Apps share one key unless `ownKey`,
+   * which App JWT tests need to tell Apps apart.
+   */
   seedApp(
     owner: string,
-    options: { slug?: string; name?: string; permissions?: Permissions; callbackUrls?: string[] } = {},
+    options: { slug?: string; name?: string; permissions?: Permissions; callbackUrls?: string[]; ownKey?: boolean } = {},
   ): App {
     const account = this.account(owner) ?? this.seedUser(owner);
     const name = options.name ?? `${owner}-agent`;
+    const pem = options.ownKey ? newPrivateKey() : appPrivateKey();
     const app: App = {
       id: this.nextId++,
       slug: options.slug ?? slugify(name),
       name,
       clientId: random("Iv23li", 7),
       clientSecret: random("", 20),
-      pem: appPrivateKey(),
+      pem,
+      keys: [pem],
       owner: account,
       permissions: { ...(options.permissions ?? defaultAppPermissions) },
       callbackUrls: options.callbackUrls ?? [],
@@ -329,7 +385,27 @@ export class MockGitHub {
     return app;
   }
 
-  /** Installs `app` on `account` (made a User when unknown): all its repositories unless `repositories` names some. */
+  /** A reader App of `owner`: no permissions, its own key, not installed. */
+  seedReaderApp(owner: string, options: { slug?: string; name?: string } = {}): App {
+    return this.seedApp(owner, {
+      name: options.name ?? `gh-touchid-reader-${randomBytes(3).toString("hex")}`,
+      slug: options.slug,
+      permissions: {},
+      ownKey: true,
+    });
+  }
+
+  /** A new key for `app`, as generated on its settings page; GitHub accepts it besides the others. */
+  addKey(app: App): string {
+    const pem = newPrivateKey();
+    app.keys.push(pem);
+    return pem;
+  }
+
+  /**
+   * Installs `app` on `account` (made a User when unknown): all its repositories unless `repositories` names some. An
+   * App with no permissions is installed on no repository, as GitHub does it (`selected`, none).
+   */
   seedInstallation(
     app: App,
     account: string,
@@ -340,7 +416,7 @@ export class MockGitHub {
       app,
       account: this.account(account) ?? this.seedUser(account),
       permissions: { ...(options.permissions ?? app.permissions) },
-      repositories: options.repositories ?? "all",
+      repositories: options.repositories ?? (Object.keys(app.permissions).length === 0 ? [] : "all"),
     };
     this.installations.push(installation);
     return installation;
@@ -477,6 +553,24 @@ export class MockGitHub {
     if (method === "DELETE" && (match = path.match(/^\/applications\/([^/]+)\/token$/))) {
       return this.deleteToken(request, decodeURIComponent(match[1]!));
     }
+    if (method === "DELETE" && (match = path.match(/^\/applications\/([^/]+)\/grant$/))) {
+      return this.deleteGrant(request, decodeURIComponent(match[1]!));
+    }
+    if (method === "GET" && path === "/app") {
+      return this.getApp(request);
+    }
+    if (method === "GET" && path === "/app/installations") {
+      return this.appInstallations(request);
+    }
+    if (method === "POST" && (match = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {
+      return this.installationToken(request, Number(match[1]));
+    }
+    if (method === "GET" && path === "/installation/repositories") {
+      return this.installationRepositories(request);
+    }
+    if (method === "DELETE" && path === "/installation/token") {
+      return this.deleteInstallationToken(request);
+    }
     if (method === "GET" && (match = path.match(/^\/repos\/([^/]+)\/([^/]+)$/))) {
       return this.getRepository(request, `${decodeURIComponent(match[1]!)}/${decodeURIComponent(match[2]!)}`);
     }
@@ -502,6 +596,182 @@ export class MockGitHub {
 
   private isLive(token: Token): boolean {
     return !token.revoked && (token.expiresAt === undefined || token.expiresAt > now());
+  }
+
+  // The reader: App JWTs, installations and installation tokens
+
+  /** The App a request's `Bearer` App JWT authenticates (RS256 with one of its keys), or undefined. */
+  private jwtApp(request: RecordedRequest): App | undefined {
+    const match = (request.headers.authorization ?? "").match(/^Bearer\s+([\w-]+)\.([\w-]+)\.([\w-]+)$/);
+    if (!match) {
+      return undefined;
+    }
+    const header = base64urlJSON(match[1]!);
+    const payload = base64urlJSON(match[2]!);
+    if (!header || !payload) {
+      return undefined;
+    }
+    const app = this.apps.find((candidate) => String(candidate.id) === String(payload.iss));
+    const signed = Buffer.from(`${match[1]}.${match[2]}`);
+    const signature = Buffer.from(match[3]!, "base64url");
+    const iat = Number(payload.iat);
+    const exp = Number(payload.exp);
+    const accepted =
+      !this.rejectJWTs &&
+      header.alg === "RS256" &&
+      app !== undefined &&
+      app.keys.some((pem) => verify("RSA-SHA256", signed, createPublicKey(pem), signature)) &&
+      Number.isInteger(iat) &&
+      Number.isInteger(exp) &&
+      iat <= now() + 60 &&
+      exp > now() &&
+      exp - iat <= 600;
+    this.jwts.push({ header, payload, accepted });
+    return accepted ? app : undefined;
+  }
+
+  private installationJSON(installation: Installation): Record<string, unknown> {
+    return {
+      id: installation.id,
+      account: accountJSON(installation.account),
+      app_id: installation.app.id,
+      app_slug: installation.app.slug,
+      target_type: installation.account.type,
+      permissions: installation.permissions,
+      repository_selection: installation.repositories === "all" ? "all" : "selected",
+    };
+  }
+
+  private getApp(request: RecordedRequest): Response {
+    const app = this.jwtApp(request);
+    if (!app) {
+      return badCredentials();
+    }
+    return json(200, {
+      id: app.id,
+      slug: app.slug,
+      name: app.name,
+      client_id: app.clientId,
+      owner: accountJSON(app.owner),
+      permissions: app.permissions,
+      events: [],
+    });
+  }
+
+  private appInstallations(request: RecordedRequest): Response {
+    const app = this.jwtApp(request);
+    if (!app) {
+      return badCredentials();
+    }
+    const installations = this.installations.filter((installation) => installation.app === app);
+    return json(
+      200,
+      installations.map((installation) => this.installationJSON(installation)),
+    );
+  }
+
+  /** POST /app/installations/{id}/access_tokens: a token with the installation's permissions and repositories. */
+  private installationToken(request: RecordedRequest, id: number): Response {
+    const app = this.jwtApp(request);
+    if (!app) {
+      return badCredentials();
+    }
+    const installation = this.installations.find((candidate) => candidate.id === id && candidate.app === app);
+    if (!installation) {
+      return notFound();
+    }
+    const issued = now();
+    const token: Token = {
+      token: random("ghs_", 18),
+      kind: "installation",
+      login: `${app.slug}[bot]`,
+      clientId: app.clientId,
+      expiresAt: issued + 60 * 60,
+      target: installation.account.login,
+      repositories: installation.repositories === "all" ? undefined : [...installation.repositories],
+      permissions: { ...installation.permissions },
+      installationId: installation.id,
+      appId: app.id,
+      issuedAt: issued,
+      revoked: false,
+    };
+    this.tokens.push(token);
+    return json(201, {
+      token: token.token,
+      expires_at: new Date(token.expiresAt! * 1000).toISOString(),
+      permissions: token.permissions,
+      repository_selection: installation.repositories === "all" ? "all" : "selected",
+    });
+  }
+
+  /** GET /installation/repositories: what an installation token reaches. */
+  private installationRepositories(request: RecordedRequest): Response {
+    const token = this.bearer(request);
+    if (!token || token.kind !== "installation") {
+      return badCredentials();
+    }
+    const installation = this.installations.find((candidate) => candidate.id === token.installationId);
+    const names =
+      installation?.repositories === "all"
+        ? [...this.repositories.values()]
+            .filter((repository) => repository.owner.toLowerCase() === installation.account.login.toLowerCase())
+            .map((repository) => repository.fullName)
+        : (installation?.repositories ?? []);
+    return json(200, {
+      total_count: names.length,
+      repositories: names
+        .slice(0, Number(request.query.per_page ?? 30) || 30)
+        .map((fullName) => ({ full_name: fullName })),
+    });
+  }
+
+  /** DELETE /installation/token: the token revokes itself. */
+  private deleteInstallationToken(request: RecordedRequest): Response {
+    const token = this.bearer(request);
+    const value = (request.headers.authorization ?? "").replace(/^(?:Bearer|token)\s+/i, "");
+    const status = token && token.kind === "installation" ? 204 : 401;
+    const clientId = token?.clientId ?? "";
+    this.revocations.push({ token: value, kind: token?.kind ?? "unknown", clientId, status, at: Date.now() });
+    if (!token || status !== 204) {
+      return badCredentials();
+    }
+    token.revoked = true;
+    token.revokedAt = now();
+    token.revokedBy = "deleted";
+    return new Response(null, { status: 204 });
+  }
+
+  /** DELETE /applications/{client_id}/grant: ends the user's authorization of the App and every token it made. */
+  private deleteGrant(request: RecordedRequest, clientId: string): Response {
+    const app = this.basicApp(request);
+    if (!app || app.clientId !== clientId) {
+      return badCredentials();
+    }
+    const value = String(request.fields?.access_token ?? "");
+    const named = this.findToken(value);
+    const known = named !== undefined && named.clientId === app.clientId && named.kind === "user";
+    const status = known ? 204 : 404;
+    this.grantRevocations.push({ clientId, token: value, status, at: Date.now() });
+    if (!known) {
+      return notFound();
+    }
+    for (const token of this.tokens) {
+      if (token.clientId === app.clientId && token.login === named.login && !token.revoked) {
+        token.revoked = true;
+        token.revokedAt = now();
+        token.revokedBy = "grant";
+      }
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  /** Installation tokens neither revoked nor expired. */
+  liveInstallationTokens(): Token[] {
+    return this.tokens.filter((token) => token.kind === "installation" && this.isLive(token));
+  }
+
+  installationTokens(): Token[] {
+    return this.tokens.filter((token) => token.kind === "installation");
   }
 
   /** The live token a `Bearer` (or `token`) Authorization header carries. */
@@ -559,11 +829,14 @@ export class MockGitHub {
       return html(422, `The name ${name} is already taken.`);
     }
     const ownerLogin = this.manifestOwner ?? organization ?? this.browserLogin;
+    const permissions = this.manifestPermissions ?? (manifest.default_permissions as Permissions | undefined) ?? {};
     const app = this.seedApp(ownerLogin, {
       name,
       slug,
-      permissions: (manifest.default_permissions as Permissions | undefined) ?? {},
+      permissions,
       callbackUrls: Array.isArray(manifest.callback_urls) ? manifest.callback_urls.map(String) : [],
+      // a reader's key signs its JWTs: give it its own, so that another App's key cannot pass for it
+      ownKey: Object.keys(permissions).length === 0,
     });
     if (organization && !this.manifestOwner) {
       this.seedOrganization(organization, [this.browserLogin]);
@@ -849,7 +1122,7 @@ export class MockGitHub {
       return notFound();
     }
     let visible: boolean;
-    if (token.kind === "scoped") {
+    if (token.kind === "scoped" || token.kind === "installation") {
       visible = (token.repositories ?? []).some((name) => name.toLowerCase() === repository.fullName.toLowerCase());
     } else if (token.kind === "user") {
       visible = this.installations.some(
@@ -875,7 +1148,10 @@ export class MockGitHub {
     });
   }
 
-  /** "Installs" the App on `?target=<login>` (default: the browser's account), on `?repositories=a,b` or all. */
+  /**
+   * "Installs" the App on `?target=<login>` (default: the browser's account), on `?repositories=a,b` or all (none for
+   * an App without permissions), then sends the browser to the manifest's `setup_url` when it has one, as GitHub does.
+   */
   private installPage(slug: string, url: URL): Response {
     const app = this.apps.find((candidate) => candidate.slug === slug);
     if (!app) {
@@ -889,6 +1165,10 @@ export class MockGitHub {
     const installation = this.seedInstallation(app, target, {
       repositories: repositories ? repositories.split(",").map((name) => `${target}/${name}`) : undefined,
     });
+    const setupUrl = app.manifest?.setup_url;
+    if (typeof setupUrl === "string" && setupUrl) {
+      return redirect(withQuery(setupUrl, { installation_id: String(installation.id), setup_action: "install" }));
+    }
     return html(200, `Installed ${app.slug} on ${installation.account.login}.`);
   }
 

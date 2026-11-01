@@ -12,20 +12,52 @@ import Foundation
 // Git asks every helper of every matching section, in the order it reads them, and an empty helper drops those before
 // it; so the section goes last in the file, after any broader one such as `credential.https://github.com.helper`.
 
-/// `git setup <owner>`. The owner is kept as typed: Git compares the path of a URL case-sensitively, so it must be
-/// written as in the remotes' URLs.
-func gitSetup(_ arguments: [String]) throws -> Int32 {
-    guard arguments.count == 1, validOwner(arguments[0]) != nil else {
-        throw ToolError.usage
+/// What `git setup` wrote for an owner, from which its report is made.
+struct GitSetupResult {
+    /// The owner as typed: Git compares the path of a URL case-sensitively, so it is written as in the remotes' URLs.
+    let owner: String
+    /// The file written, as `displayFolder` shows it.
+    let file: String
+    /// The helper entry naming this gh-touchid.
+    let helper: String
+    /// The section's lines as written: the empty helper, this helper, useHttpPath.
+    let entries: [String]
+    /// How many other settings of the section were kept.
+    let kept: Int
+    /// Advice after the entries: an executable path that changes on update, or helpers Git still asks.
+    let notes: [String]
+
+    var output: [String: Any] {
+        ["owner": owner, "file": file, "helper": helper, "entries": entries, "kept": kept, "notes": notes]
     }
-    try setUpGit(owner: arguments[0])
-    return 0
+
+    /// The report `git setup` prints, from `output`.
+    static func text(_ output: [String: Any]) -> String {
+        let owner = output["owner"] as? String ?? ""
+        let file = output["file"] as? String ?? ""
+        let entries = output["entries"] as? [String] ?? []
+        let kept = output["kept"] as? Int ?? 0
+        var lines = [
+            "Wrote to \(file), so that Git asks only this gh-touchid for credentials of \(owner)'s repositories:",
+            "[credential \"https://github.com/\(owner)\"]",
+        ]
+        lines += entries.map { "\t\($0)" }
+        if kept > 0 {
+            lines.append("(and kept the section's \(kept) other setting\(kept == 1 ? "" : "s"))")
+        }
+        lines.append(
+            "The empty helper turns off helpers set for broader URLs, such as osxkeychain; useHttpPath tells gh-touchid"
+        )
+        lines.append("which repository Git is talking to. Use HTTPS remotes: https://github.com/\(owner)/REPO.git")
+        lines += output["notes"] as? [String] ?? []
+        return lines.joined(separator: "\n")
+    }
 }
 
-/// Writes the owner's entries, replacing those of an earlier run (whatever helper they named), and prints them.
-func setUpGit(owner: String) throws {
+/// Writes the owner's entries, replacing those of an earlier run (whatever helper they named).
+func setUpGit(owner: String) throws -> GitSetupResult {
     guard let target = gitCredentialExecutable() else {
-        throw ToolError.input("cannot find gh-touchid's own executable")
+        throw ToolError.refused("cannot find gh-touchid's own executable")
     }
     let section = "credential.https://github.com/\(owner)"
     let helper = "!\(shellQuoted(target.path)) git credential"
@@ -44,18 +76,9 @@ func setUpGit(owner: String) throws {
     let file = gitOutput(["config", "--global", "--show-origin", "--get", "\(section).usehttppath"])
         .flatMap { $0.hasPrefix("file:") ? $0.dropFirst("file:".count).split(separator: "\t").first : nil }
         .map { displayFolder(String($0)) } ?? "your global Git configuration"
-    print("Wrote to \(file), so that Git asks only this gh-touchid for credentials of \(owner)'s repositories:")
-    print("[credential \"https://github.com/\(owner)\"]")
-    print("\thelper =")
-    print("\thelper = \(helper)")
-    print("\tuseHttpPath = true")
-    if !kept.isEmpty {
-        print("(and kept the section's \(kept.count) other setting\(kept.count == 1 ? "" : "s"))")
-    }
-    print("The empty helper turns off helpers set for broader URLs, such as osxkeychain; useHttpPath tells gh-touchid")
-    print("which repository Git is talking to. Use HTTPS remotes: https://github.com/\(owner)/REPO.git")
+    var notes: [String] = []
     if target.changesOnUpdate {
-        print(
+        notes.append(
             "\(target.path) changes when gh-touchid is updated: run `gh-touchid git setup \(owner)` again after "
                 + "each update, or put a gh-touchid link that stays (such as Homebrew's bin or your Nix profile's) "
                 + "on PATH and run it from there."
@@ -64,32 +87,66 @@ func setUpGit(owner: String) throws {
     let helpers = credentialHelpers(for: probeURL(owner: owner)) ?? [helper]
     if helpers != [helper] {
         let names = helpers.filter { $0 != helper }.map(helperName)
-        print(
+        notes.append(
             "Here Git asks \(names.isEmpty ? "no helper" : names.joined(separator: ", ")) for \(owner)'s "
                 + "repositories\(helpers.contains(helper) ? " besides this gh-touchid" : ""): a setting after these "
                 + "entries, for example in this repository's own configuration, changes them."
         )
     }
+    return GitSetupResult(
+        owner: owner,
+        file: file,
+        helper: helper,
+        entries: ["helper =", "helper = \(helper)", "useHttpPath = true"],
+        kept: kept.count,
+        notes: notes
+    )
 }
 
-/// The end of `app create` and `app set`: in a terminal, asks whether to set up Git for the owner now and does;
-/// without one, prints the command.
-func offerGitSetup(owner: String) throws {
+/// Removes the owner's helper entries from the global Git configuration when they name this gh-touchid, keeping the
+/// section's other settings; whether there were any.
+func removeGitSetup(owner: String) throws -> Bool {
+    let section = "credential.https://github.com/\(configuredOwner(owner))"
+    let settings = globalSettings(of: section)
+    guard settings.contains(where: { $0.name == "helper" && runsThisGitCredential($0.value) }) else {
+        return false
+    }
+    let kept = settings.filter { !["helper", "usehttppath"].contains($0.name) }
+    _ = runGit(["config", "--global", "--remove-section", section])
+    for setting in kept {
+        try writeGlobalSetting(["--add", "\(section).\(setting.name)", setting.value])
+    }
+    return true
+}
+
+/// The end of `app create` and `app add`: sets up Git for the owner when `choice` says so; without a choice, asks on
+/// a terminal unless `noInput`; otherwise prints the command. The report goes to stdout unless `json`. Whether Git was
+/// set up.
+func offerGitSetup(owner: String, choice: Bool?, noInput: Bool, json: Bool) throws -> Bool {
     let command = "gh-touchid git setup \(owner)"
-    guard isatty(STDERR_FILENO) != 0, let answer = askInTerminal("Set up Git for \(owner) now? [Y/n] ") else {
+    var setUp = choice ?? false
+    if choice == nil, !noInput, isatty(STDERR_FILENO) != 0,
+       let answer = askInTerminal("Set up Git for \(owner) now? [Y/n] ") {
+        setUp = ["", "y", "yes"].contains(answer.lowercased())
+        if !setUp {
+            fputs("Git was left as it is; to set it up later, run: \(command)\n", stderr)
+            return false
+        }
+    }
+    guard setUp else {
         fputs("To have Git use gh-touchid for \(owner)'s repositories, run: \(command)\n", stderr)
-        return
+        return false
     }
-    guard ["", "y", "yes"].contains(answer.lowercased()) else {
-        fputs("Git was left as it is; to set it up later, run: \(command)\n", stderr)
-        return
+    let result = try setUpGit(owner: owner)
+    if !json {
+        print(GitSetupResult.text(result.output))
     }
-    try setUpGit(owner: owner)
+    return true
 }
 
-/// Asks on the terminal itself (`app set` reads the key from stdin) and returns the answer without surrounding
+/// Asks on the terminal itself (`app add` reads the key from stdin) and returns the answer without surrounding
 /// spaces; nil without a terminal or when its input ends.
-private func askInTerminal(_ question: String) -> String? {
+func askInTerminal(_ question: String) -> String? {
     let terminal = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
     guard terminal >= 0 else {
         return nil
@@ -113,10 +170,38 @@ private func askInTerminal(_ question: String) -> String? {
     }
 }
 
-/// What `status` says about Git and gh: for each owner the credential helpers Git asks for its repositories, each with
-/// the fix unless it is this gh-touchid alone; then which `gh` is first on PATH and whether another gh is signed in.
-func gitStatus(owners: [String]) -> [String] {
-    owners.map { ownerGitStatus($0).line } + gitHubCLIStatus()
+/// What `status` says about Git for one stored owner: the credential helpers Git asks for its repositories (nil when
+/// Git cannot be asked) and the fixes, none when it asks this gh-touchid alone.
+struct OwnerGitStatus {
+    let owner: String
+    let asked: [String]?
+    let fixes: [String]
+
+    var isThisOnly: Bool {
+        asked != nil && fixes.isEmpty
+    }
+
+    var output: [String: Any] {
+        ["owner": owner, "asked": asked.map { $0 as Any } ?? NSNull(), "fixes": fixes]
+    }
+
+    var line: String {
+        Self.line(output)
+    }
+
+    /// The `status` line, from `output`.
+    static func line(_ output: [String: Any]) -> String {
+        let owner = output["owner"] as? String ?? ""
+        guard let asked = output["asked"] as? [String] else {
+            return "Git for \(owner): cannot ask git"
+        }
+        let fixes = output["fixes"] as? [String] ?? []
+        guard !fixes.isEmpty else {
+            return "Git for \(owner) asks: this gh-touchid only"
+        }
+        return "Git for \(owner) asks: \(asked.isEmpty ? "no credential helper" : asked.joined(separator: ", ")); "
+            + "fix: \(fixes.joined(separator: ", then "))"
+    }
 }
 
 /// What `session` warns of once it has registered: each owner of the session's repositories whose Git does not ask
@@ -137,15 +222,15 @@ func sessionWarnings(repositories: [String]) -> [String] {
 /// The scopes Git reads after the global file. `git setup` writes the global file, so it cannot undo their settings.
 private let repositoryScopes: Set<String> = ["local", "worktree", "command"]
 
-/// The `status` line of one stored owner, and whether Git asks this gh-touchid alone for its repositories.
-private func ownerGitStatus(_ stored: String) -> (line: String, isThisOnly: Bool) {
+/// What `status` says about Git for one stored owner.
+func ownerGitStatus(_ stored: String) -> OwnerGitStatus {
     let owner = configuredOwner(stored)
     guard let settings = credentialHelperSettings(for: probeURL(owner: owner)) else {
-        return ("Git for \(owner): cannot ask git", false)
+        return OwnerGitStatus(owner: owner, asked: nil, fixes: [])
     }
     let helpers = askedHelpers(settings)
     if isThisGitCredentialOnly(helpers) {
-        return ("Git for \(owner) asks: this gh-touchid only", true)
+        return OwnerGitStatus(owner: owner, asked: ["this gh-touchid"], fixes: [])
     }
     let ownName = ownRealExecutablePath.map { ($0 as NSString).lastPathComponent }
     let asked = helpers.map { helper -> String in
@@ -171,11 +256,7 @@ private func ownerGitStatus(_ stored: String) -> (line: String, isThisOnly: Bool
     if later.isEmpty || !isThisGitCredentialOnly(askedHelpers(earlier)) {
         fixes.append("gh-touchid git setup \(owner)")
     }
-    return (
-        "Git for \(owner) asks: \(asked.isEmpty ? "no credential helper" : asked.joined(separator: ", ")); "
-            + "fix: \(fixes.joined(separator: ", then "))",
-        false
-    )
+    return OwnerGitStatus(owner: owner, asked: asked, fixes: fixes)
 }
 
 private func isThisGitCredentialOnly(_ helpers: [String]) -> Bool {
@@ -234,12 +315,20 @@ private func configuredOwner(_ owner: String) -> String {
     return owner
 }
 
-/// Which `gh` is first on PATH, as `gitHubCLIOnPath` says it; then, when a gh other than the wrapper is on PATH,
-/// whether gh is signed in to github.com.
-private func gitHubCLIStatus() -> [String] {
-    let onPath = gitHubCLIOnPath()
-    var lines = [onPath.line]
-    if commandsOnPath("gh").contains(where: { realPath($0) != onPath.wrapper }), let login = gitHubCLISignIn() {
+/// What `status` says about gh: which `gh` comes first on PATH (`gitHubCLIOnPath`), and when a gh other than the
+/// wrapper is on PATH, whether gh is signed in to github.com: its login, "" when it cannot be told, nil when not.
+func gitHubCLIStatus() -> [String: Any] {
+    var output = gitHubCLIOnPath().output
+    let wrapper = output["wrapper"] as? String
+    let signedIn = commandsOnPath("gh").contains(where: { realPath($0) != wrapper }) ? gitHubCLISignIn() : nil
+    output["signed_in"] = signedIn.map { $0 as Any } ?? NSNull()
+    return output
+}
+
+/// The `status` lines of `gitHubCLIStatus()`'s output.
+func gitHubCLIStatusLines(_ output: [String: Any]) -> [String] {
+    var lines = [GitHubCLIOnPath.line(output)]
+    if let login = output["signed_in"] as? String {
         lines.append(
             "another gh is signed in \(login.isEmpty ? "to github.com" : "as \(login)"): any program can use that "
                 + "login; `gh auth logout` to close it"
@@ -248,26 +337,66 @@ private func gitHubCLIStatus() -> [String] {
     return lines
 }
 
-/// Which `gh` is first on PATH: this gh-touchid's wrapper, another gh, or none, with the fix for this installation unless
-/// it is the wrapper; whether it is the wrapper; and the wrapper's real path, nil when this installation has none.
-private func gitHubCLIOnPath() -> (line: String, isWrapper: Bool, wrapper: String?) {
+/// Which `gh` is first on PATH (nil: none); the real path of this installation's wrapper (nil: it has none); and,
+/// unless the first is the wrapper, the folder to put first on PATH and the command an alias would run.
+struct GitHubCLIOnPath {
+    let first: String?
+    let wrapper: String?
+    let isWrapper: Bool
+    let folder: String?
+    let command: String?
+
+    var output: [String: Any] {
+        func value(_ text: String?) -> Any {
+            text.map { $0 as Any } ?? NSNull()
+        }
+        return [
+            "first": value(first),
+            "wrapper": value(wrapper),
+            "is_wrapper": isWrapper,
+            "path_folder": value(folder),
+            "alias_command": value(command),
+        ]
+    }
+
+    var line: String {
+        Self.line(output)
+    }
+
+    /// The `status` line, from `output`.
+    static func line(_ output: [String: Any]) -> String {
+        let first = output["first"] as? String
+        guard output["wrapper"] is String else {
+            return "gh on PATH: \(first ?? "none"); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`"
+        }
+        if let first, output["is_wrapper"] as? Bool == true {
+            return "gh on PATH: \(first), this gh-touchid's wrapper"
+        }
+        let folder = output["path_folder"] as? String ?? ""
+        let command = output["alias_command"] as? String ?? ""
+        let fix = "fix: add `export PATH=\"\(folder):$PATH\"` to your shell's profile, "
+            + "or `alias gh='\(command) gh'` for your own shell only"
+        return first.map { "gh on PATH: \($0), another gh; \(fix)" } ?? "gh on PATH: none; \(fix)"
+    }
+}
+
+/// Which `gh` is first on PATH: this gh-touchid's wrapper, another gh, or none, with the fix for this installation
+/// unless it is the wrapper.
+func gitHubCLIOnPath() -> GitHubCLIOnPath {
     let first = commandsOnPath("gh").first
     let wrapper = ownRealExecutablePath.flatMap { own in
         realPath((gitHubCLIWrapperFolder(own: own, stable: false) as NSString).appendingPathComponent("gh"))
     }
     guard let own = ownRealExecutablePath, let wrapper else {
-        let line = "gh on PATH: \(first ?? "none"); this gh-touchid has no gh of its own, run gh as `gh-touchid gh …`"
-        return (line, false, nil)
+        return GitHubCLIOnPath(first: first, wrapper: nil, isWrapper: false, folder: nil, command: nil)
     }
     if let first, realPath(first) == wrapper {
-        return ("gh on PATH: \(first), this gh-touchid's wrapper", true, wrapper)
+        return GitHubCLIOnPath(first: first, wrapper: wrapper, isWrapper: true, folder: nil, command: nil)
     }
     let folder = gitHubCLIWrapperFolder(own: own, stable: true)
     let onPath = commandsOnPath((own as NSString).lastPathComponent).first.flatMap(realPath) == own
     let command = onPath ? (own as NSString).lastPathComponent : gitCredentialExecutable()?.path ?? own
-    let fix = "fix: add `export PATH=\"\(folder):$PATH\"` to your shell's profile, "
-        + "or `alias gh='\(command) gh'` for your own shell only"
-    return (first.map { "gh on PATH: \($0), another gh; \(fix)" } ?? "gh on PATH: none; \(fix)", false, wrapper)
+    return GitHubCLIOnPath(first: first, wrapper: wrapper, isWrapper: false, folder: folder, command: command)
 }
 
 /// The folder of this installation's gh wrapper, `libexec/bin` beside the real folder of the executable `own`. With
@@ -381,10 +510,10 @@ private func globalSettings(of section: String) -> [(name: String, value: String
 
 private func writeGlobalSetting(_ arguments: [String]) throws {
     guard let result = runGit(["config", "--global"] + arguments, showErrors: true) else {
-        throw ToolError.input("cannot run git")
+        throw ToolError.refused("cannot run git")
     }
     guard result.status == 0 else {
-        throw ToolError.input("git config --global \(arguments.joined(separator: " ")) failed")
+        throw ToolError.refused("git config --global \(arguments.joined(separator: " ")) failed")
     }
 }
 

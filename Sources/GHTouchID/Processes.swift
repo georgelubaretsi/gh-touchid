@@ -144,13 +144,15 @@ func isNonInteractiveShell(_ pid: pid_t) -> Bool {
 }
 
 /// The process a session belongs to: the parent of `gh-touchid session`, or further up past shells that only run a
-/// command or a script, so that a program running `sh -c 'gh-touchid session'` registers itself. An interactive
-/// shell is a session root itself.
-func sessionRoot(of pid: pid_t) -> pid_t? {
+/// command or a script, so that a program running `sh -c 'gh-touchid session'` registers itself. With `pastAdapter`
+/// (agent protocol 2) also past `gh-touchid-adapter`, which runs the core for `rpc` and `mcp` clients, so that the
+/// client registers itself; protocol 1 stops at the adapter. An interactive shell is a session root itself.
+func sessionRoot(of pid: pid_t, pastAdapter: Bool) -> pid_t? {
     guard var root = parentProcess(pid), root > 1 else {
         return nil
     }
-    while isNonInteractiveShell(root), let parent = parentProcess(root), parent > 1 {
+    while isNonInteractiveShell(root) || (pastAdapter && processName(root) == "gh-touchid-adapter"),
+          let parent = parentProcess(root), parent > 1 {
         root = parent
     }
     return root

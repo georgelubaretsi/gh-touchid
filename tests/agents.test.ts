@@ -282,21 +282,62 @@ describe("agents starting and stopping", () => {
     expect(second.exited).toBe(false);
   });
 
-  test("a request in another protocol, or none, is refused and acts on nothing", async () => {
+  test("a request in a protocol the agent does not answer, or none, is refused naming protocol 2 and acts on nothing",
+    async () => {
+      await using env = await TestEnv.create();
+      const agent = await startAgent(env);
+      const register = { op: "register", repos: ["acme/widgets"], folder: env.workDir };
+      for (const request of [
+        register,
+        { ...register, protocol: 3, version: "99.0.0" },
+        { op: "lock" },
+        { op: "lock", protocol: 3 },
+      ]) {
+        expect(await env.agentRequest(request)).toMatchObject({ error: "protocol", protocol: 2 });
+      }
+      expect(agent.exited).toBe(false);
+      expect(env.accessLog().some((line) => /refused register to .*: not protocol 1 or 2/.test(line))).toBe(true);
+      // protocols 1 (earlier releases) and 2 are answered, each in a reply of its own protocol
+      for (const spoken of [1, 2]) {
+        expect(await env.agentRequest({ op: "status", protocol: spoken })).toMatchObject({
+          sessions: [],
+          elevations: [],
+          protocol: spoken,
+        });
+      }
+    });
+});
+
+describe("agent protocol 1, which 0.4.2 speaks", () => {
+  test("an agent of 0.4.2 serves its approved session to this gh-touchid, which asks again in protocol 1", async () => {
     await using env = await TestEnv.create();
-    const agent = await startAgent(env);
-    const register = { op: "register", repos: ["acme/widgets"], folder: env.workDir };
-    for (const request of [
-      register,
-      { ...register, protocol: 2, version: "99.0.0" },
-      { op: "lock" },
-      { op: "lock", protocol: 2 },
-    ]) {
-      expect(await env.agentRequest(request)).toMatchObject({ error: "protocol", protocol: 1 });
-    }
-    expect(agent.exited).toBe(false);
-    expect(await env.agentRequest({ op: "status", protocol: 1 })).toMatchObject({ sessions: [], elevations: [] });
-    expect(env.accessLog().some((line) => /refused register to .*: not protocol 1/.test(line))).toBe(true);
+    seedAcme(env);
+    await approvedSession(env, builds.previous);
+    // the agent at agent.sock is 0.4.2's: it refuses protocol 2
+    expect(await env.agentRequest({ op: "status", protocol: 2 })).toMatchObject({ error: "protocol", protocol: 1 });
+
+    const result = await env.run(use);
+    expect(result.status).toBe(0);
+    expect(result.auth).toEqual([]);
+    expect(result.stderr).not.toContain("does not speak protocol");
+    expect(env.accessLog().some((line) => /: not protocol 1$/.test(line))).toBe(true);
+    const grants = env.accessLog().filter((line) => /granted acme\/widgets \(session bun\[\d+\]\) as alice/.test(line));
+    expect(grants).toHaveLength(2);
+  });
+
+  test("an agent of this build serves 0.4.2, which speaks protocol 1 to it", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    await approvedSession(env, builds.later);
+    // the agent at agent.sock is this build's (stating 9.0.0): it answers protocol 2
+    expect(await env.agentRequest({ op: "status", protocol: 2 })).toMatchObject({ version: "9.0.0", protocol: 2 });
+
+    const previous = { binary: builds.previous, env: { GH_TOUCHID_TEST_PEER_REQUIREMENT: requirementFor(builds.later) } };
+    const result = await env.run(use, previous);
+    expect(result.status).toBe(0);
+    expect(result.auth).toEqual([]);
+    const grants = env.accessLog().filter((line) => /granted acme\/widgets \(session bun\[\d+\]\) as alice/.test(line));
+    expect(grants).toHaveLength(2);
   });
 });
 

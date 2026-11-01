@@ -39,11 +39,11 @@ describe("account add", () => {
     expect(env.items(services.user)).toEqual([]);
   });
 
-  test("refuses input that is not a token without asking GitHub", async () => {
+  test("refuses input that is not a token without asking GitHub (exit 2: wrong input)", async () => {
     await using env = await TestEnv.create();
     for (const stdin of ["", "\n", "ghp_two words\n", "ghp_\u00e9t\u00e9\n"]) {
       const result = await env.run(["account", "add", "alice"], { stdin });
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
       expect(result.auth).toEqual([]);
     }
     expect(env.mock.requests).toEqual([]);
@@ -94,6 +94,6 @@ test("account takes add or remove and one login", async () => {
     expect(result.auth).toEqual([]);
   }
   const invalid = await env.run(["account", "add", "not a login"]);
-  expect(invalid.status).toBe(1);
+  expect(invalid.status).toBe(2);
   expect(env.mock.requests).toEqual([]);
 });

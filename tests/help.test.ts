@@ -1,11 +1,15 @@
 // Help: `help`, `--help` and `-h` print every command; `help <command>` and `<command> --help|-h` print that command's
 // usage alone; a wrong use of a known command prints its usage on stderr (exit 2), an unknown command everything.
-// Everything after `gh` is GitHub CLI's, its `--help` included.
+// Everything after `gh` is GitHub CLI's, its `--help` included. The usage is made from the operations' declarations
+// (tests/contract.test.ts checks those through `--help --json`).
 
 import { describe, expect, test } from "bun:test";
 import { TestEnv } from "./support/harness";
 
-const commands = ["app", "account", "gh", "git", "as", "session", "elevate", "status", "lock", "version", "help"];
+const commands = [
+  "app", "account", "reader", "gh", "git", "as", "session", "elevate", "status", "setup", "lock", "version", "help",
+  "rpc", "mcp",
+];
 
 /** The command words of the synopsis lines (`  gh-touchid <command> …`) in a usage text. */
 function synopsisCommands(text: string): string[] {
@@ -65,7 +69,9 @@ describe("help", () => {
 
   const misuses: [string, string[]][] = [
     ["app", ["app", "delete", "acme"]],
+    ["app", ["app", "set", "acme", "--client-id", "Iv1"]],
     ["account", ["account", "list"]],
+    ["reader", ["reader", "list"]],
     ["git", ["git", "push"]],
     ["git", ["git", "credential", "fill"]],
     ["git", ["git", "setup"]],
@@ -73,8 +79,10 @@ describe("help", () => {
     ["session", ["session", "--for", "1h"]],
     ["elevate", ["elevate", "--until", "1h"]],
     ["status", ["status", "now"]],
+    ["setup", ["setup", "--all"]],
     ["lock", ["lock", "all"]],
     ["version", ["version", "2"]],
+    ["rpc", ["rpc", "now"]],
   ];
   for (const [command, args] of misuses) {
     test(`a wrong use (${args.join(" ")}) prints only ${command}'s usage on stderr`, async () => {

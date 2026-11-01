@@ -159,8 +159,8 @@ private func repositorySpecification(_ raw: String) throws -> String {
 }
 
 /// `gh api`'s flags that take a value (gh 2.x: `-X`, `-H`, `-F`, `-f`, `--input`, `-q`, `-t`, `--hostname`, `--cache`,
-/// `-p`); the others are switches.
-private let apiValueFlags: (long: Set<String>, short: Set<Character>) = (
+/// `-p`); the others are switches. Read here for the endpoint and by IssueCheck.swift for the method and fields.
+let apiValueFlags: (long: Set<String>, short: Set<Character>) = (
     ["method", "header", "field", "raw-field", "input", "jq", "template", "hostname", "cache", "preview"],
     ["X", "H", "F", "f", "q", "t", "p"]
 )

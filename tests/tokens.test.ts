@@ -3,10 +3,11 @@
 // about to end. Every token here is made by the mock; the assertions read what it recorded.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { binary, services, type SignIn, TestEnv } from "./support/harness";
 import type { App, Permissions, Token } from "./support/mock-github";
+import { seedReader } from "./support/reader";
 
 const issueOnly = { issues: "write", metadata: "read", contents: "read" };
 
@@ -436,5 +437,21 @@ describe("Git", () => {
     expect(token.repositories).toEqual(["acme/gadgets"]);
     expectRevoked(env, token, app);
     expect(env.accessLog().some((line) => line.includes("refused acme/gadgets"))).toBe(true);
+  });
+
+  test("Git never uses the reader: an owner without an App gets nothing, even with a reader stored", async () => {
+    await using env = await TestEnv.create();
+    const { git, log } = await configureGit(env);
+    seedReader(env);
+    env.mock.seedRepository("someone/project", { private: false });
+    const result = await env.exec([git, "ls-remote", `${env.mock.url}/someone/project.git`]);
+    expect(result.status).not.toBe(0);
+    expect(result.auth).toEqual([]);
+    expect(result.stderr).not.toContain("public read-only access");
+    expect(env.mock.requestsTo("GET", "/app/installations")).toEqual([]);
+    expect(env.mock.installationTokens()).toEqual([]);
+    expect(env.mock.gitLogins.filter((login) => login.password !== undefined)).toEqual([]);
+    expect(existsSync(log) ? readFileSync(log, "utf8") : "").not.toContain("password=");
+    expect(env.accessLog().some((line) => line.includes("refused someone/project"))).toBe(true);
   });
 });

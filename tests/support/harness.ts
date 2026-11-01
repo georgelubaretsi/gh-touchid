@@ -33,12 +33,17 @@ export const binary = resolve(repositoryRoot, process.env.GH_TOUCHID_BINARY ?? "
 
 /**
  * The other builds scripts/test-builds.sh makes, to meet other releases: the same sources stating version 0.1.0,
- * which the test build's list trusts; the test build with that one revoked on its list; and gh-touchid 0.4.1.
+ * which the test build's list trusts; the test build with that one revoked on its list; gh-touchid 0.4.2 and 0.4.1;
+ * and the same sources stating version 9.0.0.
  */
 export const builds = {
   older: resolve(repositoryRoot, "build/test/older/gh-touchid"),
   revoking: resolve(repositoryRoot, "build/test/revoking/gh-touchid"),
   legacy: resolve(repositoryRoot, "build/test/legacy/gh-touchid"),
+  /** gh-touchid 0.4.2, the last release of agent protocol 1. */
+  previous: resolve(repositoryRoot, "build/test/previous/gh-touchid"),
+  /** The same sources stating version 9.0.0, which 0.4.2 takes for a later release. */
+  later: resolve(repositoryRoot, "build/test/later/gh-touchid"),
 } as const;
 
 /** The version `builds.older` states. */
@@ -524,6 +529,16 @@ function agentRequest(socket: string, request: Record<string, unknown>): Promise
   });
   connection.on("end", () => finish(undefined));
   return promise;
+}
+
+/** The `{"error": {code, message}}` that ends stderr with --json; throws when the last line is not one. */
+export function lastError(stderr: string): { code: string; message: string } {
+  const lines = stderr.trimEnd().split("\n");
+  const error = JSON.parse(lines[lines.length - 1]!).error;
+  if (typeof error?.code !== "string" || typeof error?.message !== "string") {
+    throw new Error(`stderr does not end with a JSON error:\n${stderr}`);
+  }
+  return error;
 }
 
 function prefixedLines(text: string, prefix: string): string[] {

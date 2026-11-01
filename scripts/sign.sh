@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Signs gh-touchid in a release tarball with a Developer ID and the hardened runtime, has Apple notarize it, and
-# repacks the tarball and its .sha256 in place with scripts/pack.sh. Only bin/gh-touchid changes: every other file,
-# GitHub's gh above all (its SHA-256 and cdhashes are pinned inside gh-touchid), is checked to come out byte for byte
-# and mode for mode as it went in. The release workflow runs it on tags only.
+# Signs gh-touchid and gh-touchid-adapter in a release tarball with a Developer ID and the hardened runtime, has Apple
+# notarize them, and repacks the tarball and its .sha256 in place with scripts/pack.sh. Only bin/gh-touchid and
+# libexec/gh-touchid/gh-touchid-adapter change: every other file, GitHub's gh above all (its SHA-256 and cdhashes are
+# pinned inside gh-touchid), is checked to come out byte for byte and mode for mode as it went in. The release workflow
+# runs it on tags only.
 #
 #   scripts/sign.sh TARBALL [--work FOLDER]
 #   scripts/sign.sh TARBALL --ad-hoc
@@ -24,6 +25,9 @@ set -euo pipefail
 # gh-touchid's code signing identifier. With a Developer ID, the Keychain trusts gh-touchid by it and the team, so
 # Always Allow lasts across updates.
 identifier=com.lubaretsi.gh-touchid
+# gh-touchid-adapter's: an identifier of its own, so that nothing that trusts gh-touchid by its identifier and team
+# (the Keychain, a later release's agent) trusts the adapter.
+adapter_identifier=com.lubaretsi.gh-touchid-adapter
 # Apple's "Developer ID Certification Authority" G2 intermediate, which issues Developer ID certificates and is not
 # among macOS's root certificates: https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer, by its SHA-256.
 intermediate_url=https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
@@ -83,11 +87,11 @@ fi
 trap cleanup EXIT
 work="$(cd "$work" && pwd -P)"
 
-# Each path, its mode, and the SHA-256 of each file but bin/gh-touchid, the one file signing changes.
+# Each path, its mode, and the SHA-256 of each file but the two signing changes.
 manifest() {
   (cd "$1" && find . -print | LC_ALL=C sort | while IFS= read -r path; do
     hash=-
-    if [ -f "$path" ] && [ "$path" != ./bin/gh-touchid ]; then
+    if [ -f "$path" ] && [ "$path" != ./bin/gh-touchid ] && [ "$path" != ./libexec/gh-touchid/gh-touchid-adapter ]; then
       hash="$(/usr/bin/shasum -a 256 < "$path")"
       hash="${hash%% *}"
     fi
@@ -95,10 +99,10 @@ manifest() {
   done)
 }
 
-# The binary signed with the identifier and the hardened runtime, in both slices; with a Developer ID, by the team
-# TEAM, through Apple's chain, with a secure timestamp.
+# BINARY signed as IDENTIFIER with the hardened runtime, in both slices; with a Developer ID, by the team TEAM, through
+# Apple's chain, with a secure timestamp.
 check_signature() {
-  local binary=$1 team=$2 architecture info
+  local binary=$1 identifier=$2 team=$3 architecture info
   /usr/bin/codesign --verify --strict --all-architectures --verbose=2 "$binary"
   for architecture in arm64 x86_64; do
     info="$(/usr/bin/codesign -d -vv --arch "$architecture" "$binary" 2>&1)"
@@ -121,13 +125,15 @@ check_signature() {
 mkdir "$work/original" "$work/stage" "$work/repacked"
 tar -xzf "$tarball" -C "$work/original"
 tar -xzf "$tarball" -C "$work/stage"
-[ -d "$work/stage/$name" ] || fail "$tarball holds no $name/"
 binary="$work/stage/$name/bin/gh-touchid"
 [ -f "$binary" ] || fail "$tarball holds no $name/bin/gh-touchid"
+adapter="$work/stage/$name/libexec/gh-touchid/gh-touchid-adapter"
+[ -f "$adapter" ] || fail "$tarball holds no $name/libexec/gh-touchid/gh-touchid-adapter"
 
 team=
 if [ -n "$ad_hoc" ]; then
   /usr/bin/codesign --force --options runtime --identifier "$identifier" --sign - "$binary"
+  /usr/bin/codesign --force --options runtime --identifier "$adapter_identifier" --sign - "$adapter"
 else
   # A keychain of its own, with a random password, for the certificate and the Developer ID intermediate.
   keychain="$work/signing.keychain-db"
@@ -173,13 +179,19 @@ else
   echo "sign.sh: signing with $identity, team $team"
   /usr/bin/codesign --force --options runtime --timestamp --identifier "$identifier" --keychain "$keychain" \
     --sign "$identity" "$binary"
+  /usr/bin/codesign --force --options runtime --timestamp --identifier "$adapter_identifier" --keychain "$keychain" \
+    --sign "$identity" "$adapter"
 fi
-check_signature "$binary" "$team"
+check_signature "$binary" "$identifier" "$team"
+check_signature "$adapter" "$adapter_identifier" "$team"
 
 if [ -z "$ad_hoc" ]; then
   (umask 077 && printf '%s\n' "$NOTARY_KEY_P8" > "$work/notary-key.p8")
   notary=(--key "$work/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
-  /usr/bin/ditto -c -k --keepParent "$binary" "$work/gh-touchid.zip"
+  # Both in one submission: a folder of the two, zipped.
+  mkdir "$work/notarize"
+  cp -p "$binary" "$adapter" "$work/notarize/"
+  /usr/bin/ditto -c -k --keepParent "$work/notarize" "$work/gh-touchid.zip"
   # notarytool's own exit status says nothing of the verdict; its JSON does.
   /usr/bin/xcrun notarytool submit "$work/gh-touchid.zip" "${notary[@]}" --wait --timeout 1h --output-format json \
     > "$work/submission.json" || true
@@ -191,12 +203,14 @@ if [ -z "$ad_hoc" ]; then
   [ "$status" = Accepted ] || fail "Apple's notary service answered $status for submission $submission"
   rm -f "$work/notary-key.p8"
   # A bare executable cannot have its ticket stapled; Gatekeeper looks the ticket up online, as here.
-  for attempt in 1 2 3 4 5 6; do
-    if /usr/bin/codesign --verify --check-notarization -R=notarized --verbose=2 "$binary"; then
-      break
-    fi
-    [ "$attempt" -lt 6 ] || fail "the notarization ticket is not available online"
-    sleep 10
+  for checked in "$binary" "$adapter"; do
+    for attempt in 1 2 3 4 5 6; do
+      if /usr/bin/codesign --verify --check-notarization -R=notarized --verbose=2 "$checked"; then
+        break
+      fi
+      [ "$attempt" -lt 6 ] || fail "the notarization ticket of $(basename "$checked") is not available online"
+      sleep 10
+    done
   done
 fi
 
@@ -206,6 +220,7 @@ tar -xzf "$tarball" -C "$work/repacked"
 manifest "$work/original/$name" > "$work/original.manifest"
 manifest "$work/repacked/$name" > "$work/repacked.manifest"
 diff -u "$work/original.manifest" "$work/repacked.manifest" ||
-  fail "the repacked tarball differs from the original in more than bin/gh-touchid's contents"
-check_signature "$work/repacked/$name/bin/gh-touchid" "$team"
+  fail "the repacked tarball differs from the original in more than the contents of gh-touchid and gh-touchid-adapter"
+check_signature "$work/repacked/$name/bin/gh-touchid" "$identifier" "$team"
+check_signature "$work/repacked/$name/libexec/gh-touchid/gh-touchid-adapter" "$adapter_identifier" "$team"
 cat "$output/$name.tar.gz.sha256"

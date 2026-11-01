@@ -25,8 +25,14 @@ let sharesAgentSocket: Bool = {
 #endif
 }()
 
-/// The agent protocol this build speaks; every request and reply carries it with `toolVersion`.
-let agentProtocol = 1
+/// The agent protocol this build speaks; every request and reply carries it with `toolVersion`. Protocol 2 changed
+/// what `register` registers: the session's program is also looked for past `gh-touchid-adapter`, so that a session
+/// started through `gh-touchid rpc|mcp` belongs to the client that started the adapter.
+let agentProtocol = 2
+
+/// The protocols this build's agent answers, each as it means (1: `register` looks past shells only); its client
+/// falls back to the protocol of an earlier release's agent that refuses `agentProtocol`.
+let agentProtocols: Set<Int> = [1, 2]
 
 @_silgen_name("csops")
 func csops(_ pid: pid_t, _ operation: UInt32, _ buffer: UnsafeMutableRawPointer?, _ size: Int) -> Int32

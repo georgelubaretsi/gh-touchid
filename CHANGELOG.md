@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A public reader. `gh-touchid reader create` makes a GitHub App with no permissions on your account. After that, a
+  `gh` command for a repository whose owner has no App of yours, or one that names no repository (`gh search`,
+  `gh api users/…`), runs without Touch ID with a one-hour token of that App's bot, revoked after gh. Every such use
+  prints that the token is for reading only, and gh-touchid refuses commands that open an issue (`gh issue create`,
+  `gh api` POST to `repos/…/issues`, `gh api graphql` with `createIssue` or a query it cannot read): GitHub lets the
+  bot open issues on public repositories. `reader add --app-id <id> < key.pem` takes a key made on GitHub (to rotate
+  it, or to use the App on another Mac); `reader remove` forgets it.
+- Every command can be driven by scripts and agents: `--json` prints one JSON value, `--input <file|->` takes the
+  input as JSON, `--no-input` never prompts, errors come as `{"error": {"code": …, "message": …}}` on stderr, and
+  `gh-touchid --help --json` lists the commands as MCP tools with their JSON Schemas. Secrets come only on stdin,
+  never as flags or from an input file.
+- `gh-touchid mcp` and `gh-touchid rpc` serve the commands over MCP and over JSON-RPC 2.0 on stdio, through a separate
+  program that holds no secrets. Commands that take a secret are refused there, and say which command to run instead.
+- `gh-touchid setup [<owner>...]` sets up what is missing: an App and sign-in per owner, Git, the reader. Running it
+  again repairs what changed.
+- `gh-touchid app remove <owner>` deletes the owner's App and sign-in from the Keychain and its Git entries, ends the
+  sign-in on GitHub, and prints where to delete the App.
+- `gh-touchid status --json`.
+
+### Changed
+
+- `app set` is now `app add`, with the same arguments; `app set` no longer exists.
+- Invalid input exits with status 2 instead of 1.
+- An owner without an App no longer means a refusal when a reader is stored; without one, the refusal names
+  `gh-touchid reader create` first.
+- Agent protocol 2: a session started through `gh-touchid rpc` or `mcp` belongs to the program that started the
+  adapter, not the adapter. The agent still answers protocol 1, and gh-touchid speaks protocol 1 to the agent of an
+  earlier release, whose sessions started through the adapter belong to the adapter.
+
 ## [0.4.2] - 2026-10-24
 
 ### Added

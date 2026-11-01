@@ -13,7 +13,7 @@ final class LocalServer {
     init(port: Int) throws {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
-            throw ToolError.input("cannot create a socket")
+            throw ToolError.refused("cannot create a socket")
         }
         // a run that just ended may leave the port in TIME_WAIT; another listener still makes bind fail
         var reuse: Int32 = 1
@@ -32,7 +32,7 @@ final class LocalServer {
         guard listening else {
             let reason = String(cString: strerror(errno))
             close(fd)
-            throw ToolError.input(
+            throw ToolError.refused(
                 "cannot listen on 127.0.0.1:\(port) (\(reason)); GitHub sends the browser back to that port, so "
                     + "whatever uses it must stop first"
             )
