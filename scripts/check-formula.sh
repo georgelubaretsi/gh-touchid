@@ -56,6 +56,8 @@ brew() {
 }
 
 brew tap-new --no-git local/check >/dev/null
+# Homebrew 7 loads formulae only from taps it was told to trust; this one is the script's own, in its own Homebrew
+brew trust local/check >/dev/null
 tap="$(brew --repository local/check)"
 "$here/render-formula.sh" "file://$tarball" "$sha256" > "$tap/Formula/gh-touchid.rb"
 
