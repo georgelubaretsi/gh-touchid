@@ -6,36 +6,54 @@ import SwiftUI
 
 // The approval window: what a prompt asks in labelled rows, Touch ID embedded in the window (LAAuthenticationView)
 // instead of macOS's small sheet, and Deny (Esc). A floating panel that takes the keyboard without activating
-// gh-touchid, so the app in front stays in front. Production builds show it from authenticate(_:); test builds only
-// lay it out for snapshots.
+// gh-touchid, so the app in front stays in front. Production builds show it from authenticate(_:); test builds lay
+// it out for snapshots, and with GH_TOUCHID_TEST_APPROVAL_WINDOW=1 run it, answered by themselves instead of Touch
+// ID, to check that it leaves the screen (tests/approval-window.test.ts).
 
 /// Asks `prompt` in the approval window with Touch ID on `context`, which can evaluate biometrics. Returns once Touch
 /// ID allows; throws when it fails, on Deny or Esc, and when nobody answers within `touchIDTimeout`. The window is
 /// gone when this returns or throws.
 @MainActor
 func approveInWindow(_ prompt: Prompt, context: LAContext) throws {
+    try runApprovalWindow(
+        prompt,
+        touchID: LAAuthenticationView(context: context, controlSize: .regular),
+        cancel: { context.invalidate() }
+    ) { answer in
+        context.evaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: prompt.fallback
+        ) { success, error in
+            let failure = success
+                ? nil
+                : ToolError.authentication(error?.localizedDescription ?? "authentication was denied")
+            DispatchQueue.main.async {
+                answer(failure)
+            }
+        }
+    }
+}
+
+/// The approval window's life: shows the window for `prompt` with `touchID` as its control, starts `ask` with the
+/// function that takes the answer (nil allows), and runs the window until the first answer, Deny or Esc, or
+/// `touchIDTimeout` (`cancel` stops whatever `ask` started). The window is off the screen when this returns or throws.
+@MainActor
+func runApprovalWindow(
+    _ prompt: Prompt,
+    touchID: NSView,
+    cancel: @escaping @MainActor () -> Void,
+    ask: (@escaping @MainActor (ToolError?) -> Void) -> Void
+) throws {
     let answer = Answer()
-    let touchID = LAAuthenticationView(context: context, controlSize: .regular)
     let window = approvalWindow(prompt, touchID: touchID) {
-        context.invalidate()
+        cancel()
         answer.give(.authentication("denied"))
     }
     window.orderFrontRegardless()
     window.makeKey()
-
-    context.evaluatePolicy(
-        .deviceOwnerAuthenticationWithBiometrics,
-        localizedReason: prompt.fallback
-    ) { success, error in
-        let failure = success
-            ? nil
-            : ToolError.authentication(error?.localizedDescription ?? "authentication was denied")
-        DispatchQueue.main.async {
-            answer.give(failure)
-        }
-    }
+    ask { answer.give($0) }
     let timeout = DispatchWorkItem {
-        context.invalidate()
+        cancel()
         answer.give(.authenticationNotAnswered)
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + touchIDTimeout, execute: timeout)
@@ -52,6 +70,41 @@ func approveInWindow(_ prompt: Prompt, context: LAContext) throws {
         throw failure
     }
 }
+
+#if GH_TOUCHID_TESTING
+/// Test builds with GH_TOUCHID_TEST_APPROVAL_WINDOW=1 show the real approval window for `prompt`, answer it "allow"
+/// themselves after 0.3 s instead of Touch ID, keep the main thread busy for 0.7 s as `reader create` keeps it, and
+/// print what the window server then shows of this process: `WINDOW: <largest alpha of its windows on screen>`, 0
+/// when none is drawn (a window taken away fades out). `WINDOW: unavailable` where no window can be shown.
+func testApprovalWindow(_ prompt: Prompt) throws {
+    guard Thread.isMainThread else {
+        fputs("WINDOW: unavailable (not on the main thread)\n", stderr)
+        return
+    }
+    let shown = try MainActor.assumeIsolated { () throws -> Bool in
+        guard NSApplication.shared.setActivationPolicy(.accessory) else {
+            return false
+        }
+        try runApprovalWindow(prompt, touchID: NSView(), cancel: {}) { answer in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                answer(nil)
+            }
+        }
+        return true
+    }
+    guard shown else {
+        fputs("WINDOW: unavailable (no window server)\n", stderr)
+        return
+    }
+    usleep(700_000)
+    let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+    let alpha = windows
+        .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
+        .compactMap { ($0[kCGWindowAlpha as String] as? NSNumber)?.doubleValue }
+        .max() ?? 0
+    fputs("WINDOW: \(alpha)\n", stderr)
+}
+#endif
 
 /// The first answer to the window (allowed, or why not), which ends its modal loop; later ones, such as the reply
 /// to an invalidated evaluation after Deny, are ignored.

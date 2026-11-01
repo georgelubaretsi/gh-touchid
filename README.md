@@ -926,7 +926,9 @@ published. The tap runs `brew test-bot` on changes made there.
 version and one that marks it revoked, and v0.4.1 from its tag, which is built once and kept. They keep their state
 in `GH_TOUCHID_TEST_DIR`, talk to a mock GitHub at `GH_TOUCHID_API_URL`, print `AUTH:` and `OPEN:` lines instead of
 showing Touch ID or a browser, and run a fake `gh`. Then `bun test` runs the suite in `tests/` against them; the
-`rpc` and `mcp` tests run the adapter through `GH_TOUCHID_ADAPTER`. The tests need Apple silicon. The check
+`rpc` and `mcp` tests run the adapter through `GH_TOUCHID_ADAPTER`. One test shows the real approval window for
+about a second, answered by the test build itself rather than Touch ID, and checks with the window server that it
+leaves the screen; it needs a login session, as macOS runners have. The tests need Apple silicon. The check
 workflow runs `just test` and `just lint` on every pull request and push to main. The release workflow runs
 `just test` before packaging.
 
