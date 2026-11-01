@@ -4,6 +4,8 @@ gh-touchid puts Touch ID in front of `gh` and Git access to GitHub on your Mac. 
 private GitHub App you create for each owner. Every use gets its own token for one repository, and the token `gh`
 used is revoked when `gh` exits. Outside a session, each use asks for Touch ID in a window that names who asked, the
 command and the repository. An AI agent can run as a *session*, which you approve once instead of on every command.
+Public data of other owners comes through a *reader*: an App of yours with no permissions, which needs no Touch ID.
+Every command also speaks JSON, and `gh-touchid mcp` serves them all to agents as MCP tools.
 
 Terms used below:
 
@@ -15,6 +17,8 @@ Terms used below:
   [Elevating a repository](#elevating-a-repository).
 - **Your accounts**: GitHub accounts whose own tokens you stored, for what your Apps cannot reach. See
   [Acting as one of your accounts](#acting-as-one-of-your-accounts).
+- **Reader**: a GitHub App of yours with no permissions, whose tokens let `gh` read public data of owners you have
+  no App for, without Touch ID. See [The reader](#5-the-reader-optional).
 
 ## Quick start
 
@@ -22,11 +26,12 @@ Terms used below:
 brew install georgelubaretsi/tap/gh-touchid
 export PATH="/opt/homebrew/opt/gh-touchid/libexec/bin:$PATH"   # run `gh` through gh-touchid; put it in your profile
 
-gh-touchid app create acme    # in the browser: create acme's App, authorize it, install it; answer Y to set up Git
+gh-touchid setup acme         # in the browser: acme's App (create, authorize, install), then the reader; Git too
 
 cd ~/code/widget              # a clone of https://github.com/acme/widget.git
 gh pr list                    # Touch ID, then a token for acme/widget only
 git push                      # the same, for Git
+gh repo view kubevirt/kubevirt   # no Touch ID: the reader, public data only
 
 gh-touchid session            # make this shell a session; start your agent from it
 ```
@@ -44,6 +49,7 @@ way to install it gives you the same release:
 | `bin/gh-touchid`        | gh-touchid itself, the only file that goes on your PATH                            |
 | `libexec/bin/gh`        | a wrapper that runs `gh` through gh-touchid                                        |
 | `libexec/gh-touchid/gh` | GitHub's own `gh` for macOS, the only `gh` gh-touchid runs ([details](#which-gh-runs)) |
+| `libexec/gh-touchid/gh-touchid-adapter` | the program `gh-touchid rpc` and `gh-touchid mcp` run; it holds no secrets ([details](#scripts-and-agents)) |
 
 ### Homebrew
 
@@ -154,6 +160,10 @@ for your login Keychain password again, and another program running as you could
 
 ## Setup
 
+`gh-touchid setup [<owner>...]` does steps 1, 3 and 5 for whatever is missing, and says whether `gh` runs through
+gh-touchid; running it again repairs what changed. Without a terminal, or with `--no-input`, it does only what needs
+no browser (Git) and lists the commands for the rest. The sections below are the same steps one by one.
+
 ### 1. A GitHub App per owner
 
 Create one App for each owner whose repositories you work on:
@@ -175,14 +185,14 @@ The browser then goes through three pages on GitHub:
 
 1. **Create GitHub App.** GitHub creates the App for the account you are signed in as in that browser, or for the
    organization when the owner is one. gh-touchid checks that the App belongs to the owner. It keeps the App's client
-   ID and client secret, and drops the private key and webhook secret, so it never acts as the App.
+   ID and client secret, and drops the private key and webhook secret, so it never acts as an owner's App.
 2. **Authorize.** You sign in to the new App as yourself (GitHub's web flow, with PKCE). Your sign-in is an access
    token that lasts 8 hours and a refresh token that renews it for 6 months. One Touch ID then stores the App and your
    sign-in in your login Keychain.
 3. **Install.** Install the App on the owner, for all repositories or only the ones agents should reach.
 
 At the end, in a terminal, gh-touchid asks `Set up Git for acme now? [Y/n]` and runs [`git setup`](#3-git) for you.
-Without a terminal it prints the command instead.
+`--git-setup` or `--no-git-setup` answers in advance; without a terminal it prints the command instead.
 
 If something goes differently:
 
@@ -204,12 +214,12 @@ Create the App yourself in **Settings → Developer settings → GitHub Apps** w
 Generate a client secret on its settings page, then run:
 
 ```sh
-gh-touchid app set acme --client-id Iv23li...
+gh-touchid app add acme --client-id Iv23li... < client-secret
 ```
 
-It reads the client secret at a hidden prompt, or from stdin. Then it sends the browser to the App's **Authorize**
-page. The code exchange checks the secret. After it, one Touch ID stores the App and your sign-in, and gh-touchid
-offers to set up Git, as `app create` does.
+It reads the client secret from stdin, or at a hidden prompt when stdin is a terminal. Then it sends the browser to
+the App's **Authorize** page. The code exchange checks the secret. After it, one Touch ID stores the App and your
+sign-in, and gh-touchid offers to set up Git, as `app create` does. (Up to 0.4.2 this was `app set`.)
 
 ### Signing in again
 
@@ -223,7 +233,7 @@ gh-touchid app login acme [--no-open]
 
 ### 3. Git
 
-Let gh-touchid answer Git's HTTPS credential requests for an owner's repositories (`app create` and `app set` offer
+Let gh-touchid answer Git's HTTPS credential requests for an owner's repositories (`app create` and `app add` offer
 to do this):
 
 ```sh
@@ -275,6 +285,60 @@ To contribute to public repositories the account is not a member of, such as ope
 project, use a classic token with the `repo` scope (and `workflow` to change workflows). A fine-grained token
 (`github_pat_…`) cannot do that; `account add` warns about it.
 
+### 5. The reader (optional)
+
+For `gh` commands about owners you have no App for, such as reading another project's issues, store a reader: a
+GitHub App of your user account with no permissions.
+
+```sh
+gh-touchid reader create [--name NAME] [--no-open]
+```
+
+The browser goes through two pages on GitHub:
+
+1. **Create GitHub App.** An App of your account named `gh-touchid-reader-` and six hex digits unless `--name` says
+   otherwise, with no permissions and no webhook. gh-touchid checks that it belongs to a user and has no
+   permissions, keeps its ID and private key, and drops its secrets. One Touch ID stores it.
+2. **Install.** Install it on your account. It asks for no repository access, so it gets none.
+
+gh-touchid then makes one token with it, checks it and revokes it. From then on, a `gh` command for an owner without
+an App of yours, or one that names no repository (`gh search`, `gh api users/octocat`), runs without Touch ID:
+
+- Its token acts as `<app>[bot]`, not as you, and reads public data: repositories, issues, pull requests, files,
+  releases, Actions runs, search and GraphQL. Your private repositories stay invisible to it.
+- The token is made for that one use, used only when GitHub reports it has no permissions and no repository, and
+  revoked when gh exits. It counts against the reader's own rate limit of 5,000 requests an hour, not yours.
+- Every use prints on stderr: `gh-touchid: public read-only access as <app>[bot]; don't create or change anything
+  with it`.
+- GitHub lets the bot open issues on any public repository, so gh-touchid refuses the commands that would:
+  `gh issue create`, `gh api` posting to `repos/OWNER/REPO/issues`, and `gh api graphql` with `createIssue` or a
+  query it cannot read. It does not refuse other writes GitHub might allow the bot ([details](#the-reader)).
+- Git never uses the reader; Git reads public repositories without a credential.
+
+To give the reader a new key, or to use it on another Mac, generate a private key in the App's settings on GitHub
+(**Settings → Developer settings → GitHub Apps → the reader → Private keys**), then:
+
+```sh
+gh-touchid reader add --app-id 123456 < ~/Downloads/gh-touchid-reader-1a2b3c.2026-11-02.private-key.pem
+```
+
+gh-touchid checks the key with GitHub, asks for Touch ID and replaces the stored reader. It prints the new key's
+fingerprint and, when it replaced one, the old key's and where to delete it. Delete the downloaded file afterwards.
+Every Mac using the same App shares its rate limit; for one of its own, run `reader create` on that Mac instead.
+
+`gh-touchid reader remove` forgets the reader (`--yes` without a terminal); the App stays on GitHub until you delete
+it there.
+
+### Removing an owner
+
+```sh
+gh-touchid app remove acme [--yes]
+```
+
+It deletes the owner's App and your sign-in from the Keychain and the owner's Git entries, ends the sign-in on GitHub
+(the App's authorization under **Settings → Applications**), and prints where to delete the App itself. It asks on a
+terminal; elsewhere `--yes` confirms.
+
 ## Everyday use
 
 With `gh` going through gh-touchid (see [Install](#running-gh-through-gh-touchid)) and Git set up for the owner, use
@@ -299,23 +363,33 @@ Codex reviews the pull requests and answers `@codex review`, and `@me` searches 
 | `gh … -R/--repo X`         | `X`: `OWNER/REPO`, `github.com/OWNER/REPO` or a URL                                |
 | `gh api repos/OWNER/REPO/…` | the one the endpoint names (not with `{owner}`/`{repo}` placeholders)             |
 | any other `gh` command     | `GH_REPO` if set, else the current repository's `origin`                           |
+| a `gh` command with none of these (`gh search …`, `gh api users/octocat`) | none: the [reader](#5-the-reader-optional) |
 | Git                        | the repository in the URL                                                          |
 
 A flag right before `-R` might take it as its value, as in `gh issue create --body -R`. For such commands only,
 gh-touchid reads which flags take values from the pinned `gh`'s `help reference`. If that cannot settle it,
 `gh-touchid as LOGIN gh …` is refused, since an account's token is not limited to the repository in the dialog.
 
-If the owner has no App stored, `gh` and Git are refused before any Touch ID dialog, with a hint naming your stored
-accounts. If you are not signed in to the owner's App, the hint names the `app login` command to run.
+If the owner has no App stored, or the command names no repository, `gh` uses the [reader](#5-the-reader-optional)
+when one is stored: no Touch ID, public data only. Without a reader it is refused before any Touch ID dialog, with a
+hint naming `gh-touchid reader create` and your stored accounts. Git is refused for such owners before any dialog. If
+you are not signed in to the owner's App, the hint names the `app login` command to run.
 
 How a use gets its token:
 
 ```mermaid
 flowchart TD
-    use["gh or Git needs a token for owner/repo"] --> acting{"acting as one of your accounts?"}
+    use["gh or Git needs a token"] --> acting{"acting as one of your accounts?"}
     acting -- yes --> touchAs["Touch ID, every time"] --> accountToken["that account's token"]
-    acting -- no --> app{"owner's App stored and signed in?"}
-    app -- no --> refused["refused, no dialog"]
+    acting -- no --> owned{"a repository whose owner has your App?"}
+    owned -- "no, gh" --> reader{"reader stored?"}
+    reader -- no --> refused["refused, no dialog"]
+    reader -- yes --> opens{"opens an issue?"}
+    opens -- yes --> refused
+    opens -- no --> readerToken["reader token: public data, the reader's bot, no Touch ID"]
+    owned -- "no, Git" --> refused
+    owned -- yes --> app{"signed in to the owner's App?"}
+    app -- no --> refused
     app -- yes --> session{"inside a session?"}
     session -- no --> touchOnce["Touch ID for this use"] --> repoToken["token for owner/repo, acting as you"]
     session -- "yes, pending" --> touchSession["Touch ID once, for the session"] --> lists
@@ -426,13 +500,14 @@ gh-touchid elevate --for 30m --repo acme/one
 ## Status, lock and the access log
 
 ```sh
-gh-touchid status
+gh-touchid status [--json]
 gh-touchid lock      # ends every session approval and elevation now
 ```
 
 `status` shows:
 
 - stored Apps, with who is signed in to each (or the `app login` to run), and your accounts (names only);
+- the reader: its App and the account it belongs to, or `none`;
 - for each owner, which credential helpers Git asks, with the fix unless it is this gh-touchid alone. That is
   `fix: gh-touchid git setup OWNER`, except when a setting Git reads after the global file (the repository's own
   `.git/config`, its worktree file, or `GIT_CONFIG_PARAMETERS`) overrides it: then the file and the command that
@@ -457,6 +532,7 @@ asked:
 ```text
 granted acme/one (session agent[700]), elevated as octocat to gh-touchid[812] < git-remote-https[811] < git[810] < zsh[790] < agent[700]
 granted acme/three (issues, session agent[700]) as octocat to …
+granted kubevirt/kubevirt (reader gh-touchid-reader-1a2b3c) to …
 granted acme/one (as octocat) to …
 ```
 
@@ -471,8 +547,8 @@ same organization makes a second, duplicate App.
    members should reach.
 2. For each member, the organization owner generates a client secret on the App's settings page. They hand it, with
    the App's client ID, to that member privately.
-3. The member runs `gh-touchid app set acme --client-id Iv23li...`, enters the secret at the hidden prompt, and
-   authorizes the App as themselves.
+3. The member runs `gh-touchid app add acme --client-id Iv23li...`, enters the secret at the hidden prompt (or pipes
+   it to stdin), and authorizes the App as themselves.
 
 A member's tokens reach only repositories where the App is installed **and** the member has access. Removing the
 member from the organization ends that. Also delete their client secret on the App's settings page.
@@ -482,27 +558,69 @@ Only organization owners and App managers can generate a private key for the App
 
 ## Command reference
 
-`gh-touchid help` lists every command; `gh-touchid help <command>` or `gh-touchid <command> --help` shows one.
+`gh-touchid help` lists every command; `gh-touchid help <command>` or `gh-touchid <command> --help` shows one, with
+an example.
 
 | Command | What it does |
 | --- | --- |
-| `app create <owner> [--name <name>] [--no-open]` | make the owner's private App in the browser and sign in to it |
-| `app set <owner> --client-id <id> [--no-open]` | use an App made by hand; reads its client secret, then signs in |
+| `setup [<owner>...]` | set up what is missing: an App and sign-in per owner, Git, the reader |
+| `app create <owner> [--name <name>] [--no-open] [--git-setup\|--no-git-setup]` | make the owner's private App in the browser and sign in to it |
+| `app add <owner> --client-id <id> [--no-open] [--git-setup\|--no-git-setup] < client-secret` | use an App made by hand; reads its client secret, then signs in |
 | `app login <owner> [--no-open]` | sign in to the owner's App again |
-| `account add <login>` | store a token of one of your GitHub accounts, once GitHub confirms the login |
+| `app remove <owner> [--yes]` | delete the owner's App, sign-in and Git entries; end the sign-in on GitHub |
+| `reader create [--name <name>] [--no-open]` | make and store the [reader](#5-the-reader-optional) |
+| `reader add --app-id <id> < private-key` | store a reader made by hand, or a new key for it |
+| `reader remove [--yes]` | forget the reader |
+| `account add <login> < token` | store a token of one of your GitHub accounts, once GitHub confirms the login |
 | `account remove <login>` | delete that token |
-| `gh <arguments...>` | run GitHub CLI with a token for one repository |
+| `gh <arguments...>` | run GitHub CLI with a token for one repository, or the reader's |
 | `git setup <owner>` | make this gh-touchid Git's only credential helper for the owner's repositories |
 | `git credential <get\|store\|erase>` | that helper; answers only Git's HTTPS transport |
 | `as <login> [--] <command> [arguments...]` | run a command as one of your accounts, with Touch ID on every use |
 | `session [--repo <owner/name>]...` | register the program that ran it as a [session](#sessions) |
 | `elevate --for <duration> [--repo <owner/name>]...` | add `workflows` to the repositories' tokens for a while |
-| `status` | show Apps, accounts, Git and `gh` setup, sessions and elevations |
+| `status` | show Apps, accounts, the reader, Git and `gh` setup, sessions and elevations |
 | `lock` | end every session approval and elevation now |
 | `version` | print the version |
+| `rpc`, `mcp` | serve the commands over JSON-RPC or MCP ([below](#scripts-and-agents)) |
 | `help [<command>]` | print every command's usage, or one command's |
 
 Everything after `gh-touchid gh` goes to GitHub CLI, so `gh-touchid gh --help` is GitHub CLI's help.
+
+## Scripts and agents
+
+Every command takes these flags, before or after its words; after `gh`, `as` and `git credential`, whose arguments
+belong to another program, only before them:
+
+| Flag | What it does |
+| --- | --- |
+| `--json` | print the result as one JSON value on stdout; later versions only add fields |
+| `--input <file\|->` | take the input as one JSON object, from a file or stdin, keyed as in the command's schema; flags are the same names in kebab-case |
+| `--no-input` | never prompt; fail naming the command to run instead |
+
+```sh
+gh-touchid --json status
+echo '{"owner": "acme"}' | gh-touchid --json --input - git setup
+gh-touchid --json gh -R acme/widget pr list      # {"exit_code": 0, "stdout": "…", "stderr": "…"}
+gh-touchid --help --json                         # every command as an MCP tool, with its JSON Schemas
+```
+
+- Exit status 0 is success, 2 wrong input, 1 anything else. Without `--json`, `gh` and `as` pass on the status of
+  what they ran; with it, that status is `exit_code` in the output, and output over 1 MiB goes to a private file
+  whose path replaces it.
+- With `--json`, an error is the last line on stderr: `{"error": {"code": "no_app", "message": "…"}}`. The codes are
+  stable.
+- Input is checked against the command's schema before anything is done, and every result against its output schema
+  (a mismatch is an `output_invalid` error, a bug to report). Secrets (a client secret, a token, the reader's key)
+  come only on stdin, never as flags or from an input file.
+- `git credential get` answers only Git's own pipe, never `--json`.
+
+`gh-touchid mcp` serves every command as an MCP tool over stdio, and `gh-touchid rpc` as JSON-RPC 2.0 methods, one
+message per line, named as in `--help --json` (`app_create`, `gh`, `status`). Both run
+`libexec/gh-touchid/gh-touchid-adapter`, a separate program that holds no secrets and runs gh-touchid once per call.
+Touch ID still decides what needs it. Commands that take a secret are refused there, with the command to run in a
+terminal instead, so that a secret never passes through a model. Long commands report progress and stop when
+cancelled (`notifications/progress`, `notifications/cancelled`).
 
 ## AI agent usage
 
@@ -510,17 +628,22 @@ This workflow has been tested only with [Oh My Pi (OMP)](https://github.com/can1
 harnesses have not been verified to keep hidden PTY input and Git credential-helper traffic outside model context.
 
 - Agents run ordinary `gh` and Git commands. Inside an approved session they need no Touch ID for the session's
-  repositories and act as you through the App. Anything else asks for Touch ID on each use. For `gh`, the wrapper's
-  folder must come first in the PATH the agent gets; an alias in your shell does not reach it.
+  repositories and act as you through the App. Public data of other owners comes through the reader without Touch ID.
+  Anything else asks for Touch ID on each use. For `gh`, the wrapper's folder must come first in the PATH the agent
+  gets; an alias in your shell does not reach it.
+- The reader is for reading. Its token is the reader App's bot, which GitHub lets open issues and perhaps more on
+  public repositories; gh-touchid refuses opening issues and says so on every use. Agents must not create or change
+  anything with it.
+- Harnesses that speak MCP can run `gh-touchid mcp` as a server instead of a shell; the same approvals apply.
 - Starting a session is the user's decision. The user, or a harness plugin, runs `gh-touchid session` from the agent's
   process (a tool's `sh -c` counts as the agent). The first GitHub use then shows the approval dialog, and the user
   decides. Outside a session, gh-touchid prints a hint to stderr with each per-use dialog.
 - `elevate` and `as` are the user's decision too. Show the exact command, its repositories and duration before
   starting it.
-- Storing Apps, sign-ins and account tokens is for humans only. Run `gh-touchid account add` and `app set` in an
-  interactive PTY where the user types at the hidden prompt. Run `app create` and `app login` from the user's own
-  terminal. Never request or accept a token, secret or key through chat, tool arguments, environment dumps or agent
-  messages.
+- Storing Apps, sign-ins, account tokens and the reader's key is for humans only. Run `gh-touchid account add` and
+  `app add` in an interactive PTY where the user types at the hidden prompt. Run `app create`, `app login` and
+  `reader create` from the user's own terminal. Never request or accept a token, secret or key through chat, tool
+  arguments, environment dumps or agent messages.
 - Use an OMP supervised PTY for commands waiting on Touch ID, so that normal conversation does not abort the process.
 - On first use, macOS may ask for the login Keychain password: a signed release once more after the first signed
   update, a development build after each new build. Choose **Always Allow** only when the dialog names `gh-touchid`
@@ -543,9 +666,9 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
 
 ### Tokens and what they reach
 
-- Every token gh-touchid makes acts as you. It is narrowed from your sign-in to the owner's App
-  (`POST /applications/{client_id}/token/scoped`) to one repository, without `workflows` unless the repository is
-  elevated. Issue-only tokens never include `workflows`.
+- Every token gh-touchid makes acts as you, except the reader's ([below](#the-reader)). It is narrowed from your
+  sign-in to the owner's App (`POST /applications/{client_id}/token/scoped`) to one repository, without `workflows`
+  unless the repository is elevated. Issue-only tokens never include `workflows`.
 - A narrowed token lasts as long as the sign-in's access token: at most 8 hours, at least one. gh-touchid renews the
   sign-in when less than an hour is left.
 - The token of a `gh` command is revoked when `gh` exits. SIGINT, SIGQUIT, SIGHUP and SIGTERM sent to gh-touchid are
@@ -564,15 +687,43 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
   far as your own access goes. gh-touchid uses them only to narrow, renew and revoke tokens. It keeps only sign-ins
   that expire.
 - A refresh token works once, so renewing happens under a lock that other gh-touchid processes wait for.
-- gh-touchid holds no private key of the App, so nothing it keeps can act as the App's bot. But whoever owns the App
-  on GitHub (you, or your organization's owners and App managers) can generate a new key in its settings. With it
-  they can act as the bot on every account the App is installed on, as with any GitHub App.
+- gh-touchid holds no private key of an owner's App, so nothing it keeps can act as that App's bot. But whoever owns
+  the App on GitHub (you, or your organization's owners and App managers) can generate a new key in its settings.
+  With it they can act as the bot on every account the App is installed on, as with any GitHub App.
 - Your accounts' tokens are as long-lived and broad as you made them on GitHub, and gh-touchid never revokes them.
   Every use asks for Touch ID and names the command, the repository and who asked. The token goes only to the `gh`
   that gh-touchid starts, or to Git's transport.
 - A `gh` signed in on its own (`gh auth login`, with its token in the Keychain or in its `hosts.yml`) is a way to
   GitHub that gh-touchid does not gate. Any program running as you can use that login, whichever `gh` comes first on
   PATH. `status` says when one is; `gh auth logout` with that `gh` closes it.
+
+### The reader
+
+- Its tokens act as the reader App's bot, `<app>[bot]`, not as you. The reader's private key is the one App key
+  gh-touchid keeps. It signs a short-lived JSON Web Token with it to make each token, and never prints or logs it.
+- For each use, GitHub must report that the new token has no permissions, that the installation's repositories are
+  `selected`, and that it lists none. Otherwise the token is revoked and the use refused, so an App that later gets
+  permissions or repositories on GitHub never reaches `gh`.
+- A reader token reads public data and nothing private. But GitHub lets anyone who can read a repository open
+  issues on it, the bot included; this was tested on public repositories of other owners. Before any token is
+  made, gh-touchid refuses `gh issue create`, `gh api` posting to a repository's issues (by owner and name, by id,
+  or through a placeholder such as `{owner}` that gh fills in later), and `gh api graphql` with `createIssue`, a
+  query it cannot read, or a `-F` query with a placeholder. It finds the command as gh's parser does.
+- In the same tests GitHub refused the bot comments, labels, stars, gists and new repositories. Other writes
+  (reactions, forks, discussions, pull requests) were not tested, and gh-touchid does not refuse them. The notice on
+  stderr is advice, and an agent that has been prompt-injected can ignore it.
+- A reader token lasts an hour at most and is revoked when `gh` exits. Git never gets one.
+- The key never expires. Whoever reads it can make bot tokens with these limits until the key is deleted in the App's
+  settings; `reader add` replaces it.
+
+### `rpc` and `mcp`
+
+- The adapter they run is a separate program. It reads no Keychain item, never talks to the background agent, holds
+  no secrets, and runs gh-touchid with `--json --input -` for each call. The agent does not trust it.
+- It refuses commands that take a secret, so a token, client secret or key never passes through an MCP client's
+  parameters, and from there a model's context.
+- gh-touchid itself links no third-party code. The adapter uses the official MCP Swift SDK, pinned in
+  `Package.resolved`.
 
 ### What is stored where
 
@@ -581,6 +732,7 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
 | each owner's App: client ID and secret | login Keychain, service `com.lubaretsi.gh-touchid.app`, account = owner |
 | your sign-in to each owner's App | login Keychain, service `com.lubaretsi.gh-touchid.signin`, account = owner |
 | your accounts' tokens | login Keychain, service `com.lubaretsi.gh-touchid.user`, account = login |
+| the reader: its App ID and private key | login Keychain, service `com.lubaretsi.gh-touchid.reader`, account = `reader` |
 | sessions and elevations | memory of the background agent only |
 | the access log | `~/Library/Logs/gh-touchid/access.log` |
 
@@ -593,8 +745,8 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
   refuses it before any dialog, and `status` marks it: "stored by a newer gh-touchid: upgrade it". A description that
   says no format (changed in Keychain Access, or damaged) is refused too, with the command that stores the item again.
 - `status`, the hints and the checks before a dialog read only which items exist, their formats, the App's name (its
-  slug) and the signed-in login. The last two are kept in the items' comments. They never read a secret. `status`
-  also asks whether gh's own item `gh:github.com` exists, by its attributes alone.
+  slug), the signed-in login, and the reader's name and owner. These are kept in the items' comments. They never read
+  a secret. `status` also asks whether gh's own item `gh:github.com` exists, by its attributes alone.
 - Releases run with the hardened runtime, so another program cannot load code into gh-touchid to use the items;
   development builds and the build from source run without it. Either way gh-touchid itself enforces the protection:
   it asks for Touch ID or checks the session before it uses the items. But macOS lets a process read them once you
@@ -638,16 +790,18 @@ gh-touchid runs only the `gh` it was built with. No environment variable changes
   an upgrade already deleted. No session applies, so each use asks for Touch ID, and `status` names that program.
 - Releases share one agent, at `agent.sock`. Development builds, and builds from source without the release list,
   keep an agent of their own, at a socket named after their path, and trust a program at their own path, as before.
-- Any process running as you can register its parent (or the program above its non-interactive shells) as a pending
-  session, which still needs your Touch ID. It can also see the status, or `lock`.
+- Any process running as you can register its parent (or the program above its non-interactive shells, or above
+  `gh-touchid-adapter`) as a pending session, which still needs your Touch ID. It can also see the status, or `lock`.
+  An agent of 0.4.2 or earlier, which speaks the older agent protocol, stops at the adapter: a session started through
+  `rpc` or `mcp` then belongs to the adapter and ends with it.
 
 ### Signing in
 
-- `app create`, `app set` and `app login` listen on `127.0.0.1:47911` until GitHub sends the browser back: at most an
-  hour for **Create**, 15 minutes for **Authorize**.
+- `app create`, `app add`, `app login` and `reader create` listen on `127.0.0.1:47911` until GitHub sends the browser
+  back: at most an hour for **Create**, 15 minutes for **Authorize** and for the reader's **Install**.
 - They accept only answers that carry the random `state` they gave GitHub. The code exchange also needs the PKCE
-  verifier, which only this process holds.
-- The App's secret and your sign-in go from GitHub's replies straight to the Keychain.
+  verifier, which only this process holds. The reader's code is GitHub's one-time manifest code.
+- The App's secret, your sign-in and the reader's key go from GitHub's replies straight to the Keychain.
 
 ### What gh-touchid does not defend against
 
@@ -656,6 +810,13 @@ build or a build from source (ad hoc signed, without the hardened runtime; a rel
 or answer the Keychain dialogs.
 
 ## Upgrading
+
+### From 0.4.2
+
+- `app set` is now `app add`, with the same arguments; `app set` no longer exists.
+- Invalid input exits with status 2 instead of 1.
+- Nothing stored changes. For public data of other owners without Touch ID, run `gh-touchid reader create`, or
+  `gh-touchid setup`.
 
 ### From 0.4.0 or 0.4.1
 
@@ -701,15 +862,16 @@ upgrading, `gh` is whatever other `gh` comes first on PATH, or not found: pick o
   with `as`. The old items have Keychain service `com.lubaretsi.gh-touchid` and account `owner/repo`. List them with
   `security find-generic-password -s com.lubaretsi.gh-touchid -a owner/repo` (this prints no secret), and delete each
   with `security delete-generic-password -s com.lubaretsi.gh-touchid -a owner/repo`.
-- Create an App per owner with `app create`, or make one by hand and use `app set`.
+- Create an App per owner with `app create`, or make one by hand and use `app add`.
 - Replace 0.2's per-repository `credential.helper` settings (`git config --local --unset-all credential.helper`) with
   `gh-touchid git setup OWNER`.
 
 ## Building from source
 
-gh-touchid is built with the Swift compiler of Xcode 26 or later, as one universal executable for arm64 and x86_64.
-Every task goes through the justfile, inside the dev shell (`nix develop`, or direnv), which has `just` and the
-linters:
+gh-touchid is built with the Swift compiler of Xcode 26 or later, as one universal executable for arm64 and x86_64,
+with no third-party code. Beside it, `gh-touchid-adapter` (for `rpc` and `mcp`) is built with SwiftPM from
+`Package.swift`, using the versions pinned in `Package.resolved`; the first build fetches them from GitHub. Every task
+goes through the justfile, inside the dev shell (`nix develop`, or direnv), which has `just` and the linters:
 
 ```sh
 just build           # a development build in build/ (scripts/build.sh)
@@ -739,11 +901,12 @@ build/gh-touchid app create acme --name acme-dev
 unless its SHA-256 matches. It builds gh-touchid to run only that `gh`, checked by its SHA-256 and by the cdhashes of
 its two slices (`scripts/build.sh` with `--gh ../libexec/gh-touchid/gh`, `--gh-sha256` and `--gh-cdhash`).
 
-On a `v*` tag, after the tarball passes its checks, the release workflow signs `bin/gh-touchid` with
-`scripts/sign.sh`, in a job of the GitHub environment `release`, which holds the certificate and the notary key and
-which only `v*` tags reach. It imports the Developer ID Application certificate into a temporary keychain, signs with
-the hardened runtime, a secure timestamp and the identifier `com.lubaretsi.gh-touchid` (no entitlements), and has
-Apple's notary service accept the result (`notarytool`). Then it repacks the tarball and its `.sha256` as
+On a `v*` tag, after the tarball passes its checks, the release workflow signs `bin/gh-touchid` and
+`libexec/gh-touchid/gh-touchid-adapter` with `scripts/sign.sh`, in a job of the GitHub environment `release`, which
+holds the certificate and the notary key and which only `v*` tags reach. It imports the Developer ID Application
+certificate into a temporary keychain, signs with the hardened runtime, a secure timestamp and the identifiers
+`com.lubaretsi.gh-touchid` and `com.lubaretsi.gh-touchid-adapter` (no entitlements), and has Apple's notary service
+accept the result (`notarytool`). Then it repacks the tarball and its `.sha256` as
 `scripts/package.sh` lays them out (`scripts/pack.sh`), checks that every other file, GitHub's `gh` above all, is
 unchanged, and deletes the keychain and the keys. The signed tarball passes the tarball and formula checks again, and
 only it is published: its SHA-256 goes into the formula and the Nix pin. Pull-request builds never see the secrets and
@@ -759,10 +922,11 @@ published. The tap runs `brew test-bot` on changes made there.
 
 ### Tests
 
-`just test` builds the test builds (`scripts/test-builds.sh`): the current sources, an older version and one that marks
-it revoked, and v0.4.1 from its tag, which is built once and kept. They keep their state in `GH_TOUCHID_TEST_DIR`, talk
-to a mock GitHub at `GH_TOUCHID_API_URL`, print `AUTH:` and `OPEN:` lines instead of showing Touch ID or a browser,
-and run a fake `gh`. Then `bun test` runs the suite in `tests/` against them. The tests need Apple silicon. The check
+`just test` builds the test builds (`scripts/test-builds.sh`): the current sources with their adapter, an older
+version and one that marks it revoked, and v0.4.1 from its tag, which is built once and kept. They keep their state
+in `GH_TOUCHID_TEST_DIR`, talk to a mock GitHub at `GH_TOUCHID_API_URL`, print `AUTH:` and `OPEN:` lines instead of
+showing Touch ID or a browser, and run a fake `gh`. Then `bun test` runs the suite in `tests/` against them; the
+`rpc` and `mcp` tests run the adapter through `GH_TOUCHID_ADAPTER`. The tests need Apple silicon. The check
 workflow runs `just test` and `just lint` on every pull request and push to main. The release workflow runs
 `just test` before packaging.
 
@@ -771,7 +935,8 @@ workflow runs `just test` and `just lint` on every pull request and push to main
 The flake's `packages.<system>.from-source` builds through the same script with Xcode 27.0, which Nix cannot provide.
 It pins nixpkgs' `gh` by its store path and SHA-256. Install Xcode 27.0 at `/Applications/Xcode.app` and build with
 Nix's sandbox off or relaxed (`sandbox = false` or `sandbox = relaxed` in `nix.conf`; the package sets
-`__noChroot`). The build stops, naming the Xcode it needs, when it finds another version. For an Xcode installed
+`__noChroot`), with network access for SwiftPM to fetch the adapter's pinned packages. The build stops, naming the
+Xcode it needs, when it finds another version. For an Xcode installed
 elsewhere, or another version at your own risk, override the package:
 
 ```nix

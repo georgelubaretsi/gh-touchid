@@ -2,8 +2,8 @@
 # Checks the Homebrew formula the way users get it, with the newest Homebrew: renders release/gh-touchid.rb.in for a
 # tarball, then runs brew style, audit --strict, install, test and linkage with a throwaway copy of Homebrew in
 # ~/Library/Caches/gh-touchid/check-formula, never the Homebrew you use, and checks that Homebrew installed
-# gh-touchid and GitHub's gh byte for byte as the tarball has them, signatures included. Run it through
-# `just check-formula`.
+# gh-touchid, gh-touchid-adapter and GitHub's gh byte for byte as the tarball has them, signatures included. Run it
+# through `just check-formula`.
 #
 #   scripts/check-formula.sh [TARBALL | FOLDER]
 #
@@ -56,6 +56,8 @@ brew() {
 }
 
 brew tap-new --no-git local/check >/dev/null
+# Homebrew 7 loads formulae only from taps it was told to trust; this one is the script's own, in its own Homebrew
+brew trust local/check >/dev/null
 tap="$(brew --repository local/check)"
 "$here/render-formula.sh" "file://$tarball" "$sha256" > "$tap/Formula/gh-touchid.rb"
 
@@ -68,12 +70,13 @@ for step in "style $formula" "audit --strict --formula $formula" "install $formu
 done
 
 # Homebrew rewrites and re-signs a Mach-O file whose links it relocates; gh-touchid's signature, and the SHA-256 and
-# cdhashes it pins for GitHub's gh, hold only if neither was touched. Identical bytes keep the signature as it was
-# (a pull request's build is linker-signed, its x86_64 slice not at all; a release's is checked by scripts/sign.sh).
+# cdhashes it pins for GitHub's gh, hold only if none of the three was touched. Identical bytes keep the signatures as
+# they were (a pull request's build is linker-signed, its x86_64 slice not at all; a release's is checked by
+# scripts/sign.sh).
 prefix="$(brew --prefix "$formula")"
 mkdir "$run/unpacked"
 /usr/bin/tar -xzf "$tarball" -C "$run/unpacked" --strip-components 1
-for file in bin/gh-touchid libexec/gh-touchid/gh; do
+for file in bin/gh-touchid libexec/gh-touchid/gh libexec/gh-touchid/gh-touchid-adapter; do
   /usr/bin/cmp -s "$run/unpacked/$file" "$prefix/$file" || fail "Homebrew installed a changed $file"
 done
-echo "==> The formula installs, passes Homebrew's checks, and keeps gh-touchid and gh as released."
+echo "==> The formula installs, passes Homebrew's checks, and keeps gh-touchid, its adapter and gh as released."

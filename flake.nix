@@ -17,12 +17,13 @@
         in
         builtins.head (builtins.head found);
 
-      # gh-touchid built from these sources by scripts/build.sh with Xcode.
+      # gh-touchid and gh-touchid-adapter built from these sources by scripts/build.sh with Xcode.
       fromSource =
         {
           lib,
           stdenvNoCC,
           gh,
+          git,
           # The Xcode that builds gh-touchid: proprietary, so never in the store; the build calls it where it is
           # installed and refuses any other version.
           xcode ? {
@@ -36,8 +37,11 @@
           src = self;
 
           # Xcode lives outside the store: the build reaches it, so it cannot run in a sandbox (`sandbox = false`
-          # or `relaxed`).
+          # or `relaxed`). Without the sandbox, SwiftPM also fetches the adapter's packages from GitHub with git, at
+          # the revisions Package.resolved pins (`--force-resolved-versions`).
           __noChroot = true;
+
+          nativeBuildInputs = [ git ];
 
           # Keep the linker's ad-hoc signature: no fixup hook may re-sign or strip the executable.
           dontFixup = true;
@@ -54,15 +58,18 @@
               --xcode-version ${lib.escapeShellArg xcode.version} \
               --gh ${gh}/bin/gh \
               --gh-sha256 "$(sha256sum ${gh}/bin/gh | cut -d ' ' -f 1)" \
-              --output gh-touchid
+              --output gh-touchid \
+              --adapter-output gh-touchid-adapter
             runHook postBuild
           '';
 
           # bin/gh-touchid is the executable itself, so that `git setup` finds it on PATH; libexec/bin/gh runs gh
-          # through it, for those who put libexec/bin on PATH or take `with-gh`.
+          # through it, for those who put libexec/bin on PATH or take `with-gh`; gh-touchid-adapter, which
+          # `gh-touchid rpc|mcp` runs, sits in libexec/gh-touchid/, where gh-touchid looks for it.
           installPhase = ''
             runHook preInstall
             install -Dm755 gh-touchid "$out/bin/gh-touchid"
+            install -Dm755 gh-touchid-adapter "$out/libexec/gh-touchid/gh-touchid-adapter"
             ${installWrapper}
             runHook postInstall
           '';
@@ -93,8 +100,8 @@
           # that gh-touchid checks.
           dontFixup = true;
 
-          # bin/gh-touchid and libexec/gh-touchid as released; libexec/bin/gh written as in the source build, so that it
-          # names the executable by its store path.
+          # bin/gh-touchid and libexec/gh-touchid (GitHub's gh and gh-touchid-adapter) as released; libexec/bin/gh
+          # written as in the source build, so that it names the executable by its store path.
           installPhase = ''
             runHook preInstall
             mkdir -p "$out/bin" "$out/libexec"

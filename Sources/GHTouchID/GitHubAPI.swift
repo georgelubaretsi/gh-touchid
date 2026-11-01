@@ -32,12 +32,14 @@ private final class ResponseBox: @unchecked Sendable {
 }
 
 /// One request to the GitHub API, with `bearer` as the credential when there is one, or else an App's client ID and
-/// secret (`basic`, for the endpoints under `/applications/{client_id}`).
+/// secret (`basic`, for the endpoints under `/applications/{client_id}`), or else an App JWT (`jwt`, for the endpoints
+/// that act as the reader App itself: `/app`, `/app/installations`).
 func githubAPI(
     _ method: String,
     _ path: String,
     bearer: String?,
     basic app: AppCredentials? = nil,
+    jwt: String? = nil,
     body: [String: Any]? = nil
 ) throws -> APIResponse {
     guard let url = URL(string: try apiBaseURL() + path) else {
@@ -52,6 +54,8 @@ func githubAPI(
     } else if let app {
         let pair = Data("\(app.clientId):\(app.clientSecret)".utf8).base64EncodedString()
         request.setValue("Basic \(pair)", forHTTPHeaderField: "Authorization")
+    } else if let jwt {
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
     }
     if let body {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

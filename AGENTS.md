@@ -6,7 +6,10 @@ from the user's sign-in to the owner's GitHub App, for one repository, revoked a
 ## Layout
 
 - `Sources/GHTouchID/`: the executable; `Access.swift` is the access policy, `GitHubApp.swift` the
-  tokens, `Identity.swift` who a socket peer is, `Usage.swift` the help text.
+  tokens, `Identity.swift` who a socket peer is, `Operations.swift` every command's declaration and the
+  JSON contract, `Reader.swift` and `IssueCheck.swift` the public reader and what it refuses.
+- `Sources/GHTouchIDAdapter/`: `gh-touchid rpc|mcp`, a separate program on the MCP Swift SDK that holds no
+  secrets and runs the core once per call.
 - `tests/`: black-box suite (Bun) against a test build; `tests/support/` has the mock GitHub.
 - `scripts/`: `build.sh` (the only place compiler flags live), `package.sh`, formula scripts.
 - `release/`: the pinned `gh` (`gh.json`), the Nix pin (`nix.json`), the Homebrew formula, and
@@ -37,6 +40,9 @@ nix develop --command just package  # release tarball in dist/
 - Test-only code sits behind `#if GH_TOUCHID_TESTING`; development-only paths check
   `pinnedGitHubCLI`.
 - Errors are `ToolError`s with lowercase messages that say what to run next.
+- Every command is an `Operation` (Operations.swift, ReaderCommands.swift): schemas, annotations, text
+  output; usage and `--help --json` come from it. Errors carry a stable `code`.
+- The core links no third-party code; dependencies go in the adapter target, pinned in Package.resolved.
 - Comments say why, in full sentences, and stay true when the code changes.
 - Changing what a stored item holds bumps `itemFormat` (Secrets.swift) and keeps reading the
   earlier formats; add a test with an item in each format.
@@ -48,10 +54,14 @@ nix develop --command just package  # release tarball in dist/
 
 - No token, client secret or refresh token may reach an error, log line, output, browser page,
   process argument or file. Safe path: only the pinned gh's `GH_TOKEN` and Git's credential pipe.
-- Every token handed out passes `authorizeUse` (Touch ID or an approved session) before
-  `issueCredential`. Safe path: change `Access.swift` only with a test for each rule touched.
+- Every token handed out passes `authorizeUse` (Touch ID, an approved session, or for the reader the issue
+  check) before `issueCredential`. Safe path: change `Access.swift` only with a test for each rule touched.
 - A handed-out token covers one repository, has `workflows` only if elevated at mint time, and is
-  revoked after gh. Safe path: `mintScopedToken` and `revokeAfterUse`; never pass the sign-in out.
+  revoked after gh; a reader token covers none, is used only when GitHub reports no permissions and no
+  repositories, and never reaches Git. Safe path: `mintScopedToken` and `revokeAfterUse`; for the reader,
+  `opensIssue` then `mintStoredReaderToken`; never pass the sign-in out.
+- Secrets come only on stdin and leave only through gh's `GH_TOKEN` and Git's pipe: never a flag, an
+  `--input` file, an `rpc`/`mcp` parameter or output. Safe path: mark the field `secret` in its `Schema`.
 - Only the pinned gh runs with a token, checked by SHA-256 and cdhash. Safe path: `gitHubCLI()`
   and `runGitHubCLI`; no environment variable picks the gh in a release build.
 - Sign-ins are read, renewed and replaced under the owner's lock, and Touch ID comes before any

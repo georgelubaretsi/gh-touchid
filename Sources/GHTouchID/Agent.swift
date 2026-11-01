@@ -9,8 +9,9 @@ import Foundation
 // only answers which session decides a caller's request and whether a repository is elevated. Sessions nest: an
 // inner session never shadows an outer one that lists the repository asked for.
 //
-// Every request and reply carries the protocol (`agentProtocol`) and the sender's version; a request in another
-// protocol, or none, is refused and nothing is done. `register`, `check`, `status` and `lock` are answered for any
+// Every request and reply carries the protocol and the sender's version. The agent answers each protocol in
+// `agentProtocols` as it means, in a reply of that protocol; a request in another, or none, is refused (naming
+// `agentProtocol`) and nothing is done. `register`, `check`, `status` and `lock` are answered for any
 // peer running as this user; `begin-approval`, `approve`, `deny` and `elevate` only for a gh-touchid this one trusts
 // (`identifyPeer`): this very executable, an earlier release on the built-in list, or a newer release. A session is
 // only ever registered by a process inside it (`register` takes the caller's own session root).
@@ -98,25 +99,28 @@ private final class SessionAgent: @unchecked Sendable {
         guard let line = readMessage(client),
               let request = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let operation = request["op"] as? String else {
-            reply(client, ["error": "bad request"])
+            reply(client, ["error": "bad request"], protocol: agentProtocol)
             return
         }
-        guard request["protocol"] as? Int == agentProtocol else {
-            appendAccessLog("refused \(printable(operation, limit: 40)) to \(who): not protocol \(agentProtocol)")
-            reply(client, ["error": "protocol"])
+        // a protocol this agent answers, each as it means; a refusal names this agent's own, which a client that
+        // speaks it too can fall back to
+        guard let spoken = request["protocol"] as? Int, agentProtocols.contains(spoken) else {
+            let known = agentProtocols.sorted().map(String.init).joined(separator: " or ")
+            appendAccessLog("refused \(printable(operation, limit: 40)) to \(who): not protocol \(known)")
+            reply(client, ["error": "protocol"], protocol: agentProtocol)
             return
         }
 
         let answer: [String: Any]
         switch operation {
         case "register":
-            answer = register(request, peer: peer, who: who)
+            answer = register(request, peer: peer, who: who, protocol: spoken)
         case "check":
             answer = check(request, peer: peer)
         case "status":
             answer = status()
         case "lock":
-            reply(client, ["ok": true])
+            reply(client, ["ok": true], protocol: spoken)
             finish("locked by \(who)")
         case "begin-approval", "approve", "deny", "elevate":
             let identity = identifyPeer(client, statedVersion: request["version"])
@@ -138,21 +142,22 @@ private final class SessionAgent: @unchecked Sendable {
         default:
             answer = ["error": "unknown request"]
         }
-        reply(client, answer)
+        reply(client, answer, protocol: spoken)
     }
 
-    /// Sends `message` with the protocol and version every reply carries.
-    private func reply(_ client: Int32, _ message: [String: Any]) {
-        _ = sendMessage(client, message.merging(["protocol": agentProtocol, "version": toolVersion]) { _, new in new })
+    /// Sends `message` with the protocol (the request's) and the version every reply carries.
+    private func reply(_ client: Int32, _ message: [String: Any], protocol spoken: Int) {
+        _ = sendMessage(client, message.merging(["protocol": spoken, "version": toolVersion]) { _, new in new })
     }
 
-    private func register(_ request: [String: Any], peer: pid_t, who: String) -> [String: Any] {
+    private func register(_ request: [String: Any], peer: pid_t, who: String, protocol spoken: Int) -> [String: Any] {
         let repositories = normalizedRepositories(request["repos"])
         guard !repositories.isEmpty else {
             return ["error": "a session needs at least one owner/name repository"]
         }
-        // the session is the program that started `gh-touchid session`, past shells that only run a command
-        guard let root = sessionRoot(of: peer), let start = processStart(root) else {
+        // the session is the program that started `gh-touchid session`, past shells that only run a command, and in
+        // protocol 2 past gh-touchid-adapter too
+        guard let root = sessionRoot(of: peer, pastAdapter: spoken >= 2), let start = processStart(root) else {
             return ["error": "the caller has no parent process to register"]
         }
         let now = Date()

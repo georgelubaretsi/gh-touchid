@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Packages a release: gh-touchid-<version>-macos.tar.gz and its .sha256, in the output folder. The tarball holds
-# gh-touchid built by scripts/build.sh and GitHub's own gh, downloaded from GitHub's release of the version pinned in
-# release/gh.json and refused unless its SHA-256 matches the pin:
+# gh-touchid and gh-touchid-adapter built by scripts/build.sh, and GitHub's own gh, downloaded from GitHub's release of
+# the version pinned in release/gh.json and refused unless its SHA-256 matches the pin:
 #
 #   gh-touchid-<version>-macos/
 #     bin/gh-touchid                  checks libexec/gh-touchid/gh's SHA-256, and its cdhash as gh starts; knows the
@@ -10,6 +10,8 @@
 #                                     for those who put libexec/bin there, so it sits beside any other gh
 #     libexec/gh-touchid/gh           GitHub's gh for macOS (universal, signed by GitHub)
 #     libexec/gh-touchid/gh-LICENSE   gh's license
+#     libexec/gh-touchid/gh-touchid-adapter
+#                                     what `gh-touchid rpc|mcp` runs (JSON-RPC and MCP over stdio), found beside gh
 #     LICENSE
 #     README.md
 #
@@ -77,8 +79,9 @@ for architecture in arm64 x86_64; do
 done
 "$root/scripts/build.sh" ${build_arguments[@]+"${build_arguments[@]}"} \
   --gh ../libexec/gh-touchid/gh --gh-sha256 "${bundled%% *}" "${cdhash_arguments[@]}" \
-  --known-releases "$root/release/known-releases" --output "$stage/bin/gh-touchid"
-chmod 755 "$stage/bin/gh-touchid"
+  --known-releases "$root/release/known-releases" --output "$stage/bin/gh-touchid" \
+  --adapter-output "$stage/libexec/gh-touchid/gh-touchid-adapter"
+chmod 755 "$stage/bin/gh-touchid" "$stage/libexec/gh-touchid/gh-touchid-adapter"
 cat > "$stage/libexec/bin/gh" <<'EOF'
 #!/bin/sh
 # gh through gh-touchid: runs the bin/gh-touchid of the installation this script is in (../../bin/gh-touchid from its

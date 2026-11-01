@@ -5,7 +5,7 @@ import Foundation
 // Signing in to an owner's GitHub App: GitHub's web flow with PKCE. The browser goes to GitHub's authorize page for the
 // App; once you choose Authorize, GitHub sends it back to the local server's /callback with a code, which (with the
 // App's client secret and this attempt's PKCE verifier) buys an expiring user access token and its refresh token.
-// `app login`, and the end of `app create` and `app set`, store the sign-in after Touch ID.
+// `app login`, and the end of `app create` and `app add`, store the sign-in after Touch ID.
 
 /// How long the browser may take to come back from GitHub's authorize page.
 let signInTimeout: TimeInterval = 15 * 60
@@ -36,7 +36,7 @@ func signInRequest(app: AppCredentials) throws -> SignInRequest {
         URLQueryItem(name: "scope", value: "offline_access"),
     ]
     guard let url = components?.string else {
-        throw ToolError.input("cannot build GitHub's authorize URL")
+        throw ToolError.refused("cannot build GitHub's authorize URL")
     }
     return SignInRequest(url: url, state: state, verifier: verifier)
 }
@@ -87,8 +87,9 @@ func awaitSignIn(
     }
 }
 
-/// `app login <owner> [--no-open]`: signs you in to the owner's stored App again, as when the sign-in has ended.
-func appLogin(owner: String, openBrowser: Bool) throws -> Int32 {
+/// `app login <owner> [--no-open]`: signs you in to the owner's stored App again, as when the sign-in has ended; the
+/// login signed in.
+func appLogin(owner: String, openBrowser: Bool) throws -> String {
     let app = try loadAppCredentials(owner: owner)
     let slug = appSlug(owner: owner)
     let server = try LocalServer(port: callbackPort)
@@ -124,7 +125,7 @@ func appLogin(owner: String, openBrowser: Bool) throws -> Int32 {
     respond(browser, status: 200, text: "Signed in as \(signIn.login). You can close this tab.")
     appendAccessLog("signed in as \(signIn.login) to the \(owner) App")
     fputs("Signed in to \(appWords(slug, owner: owner)) as \(signIn.login).\n", stderr)
-    return 0
+    return signIn.login
 }
 
 /// Stores your sign-in, and first the App it belongs to when `app` is given, holding the owner's sign-in lock: a

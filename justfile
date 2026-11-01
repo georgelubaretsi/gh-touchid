@@ -5,7 +5,7 @@
 default:
     @just --list
 
-# Development build for this Mac, which runs GH_TOUCHID_GH or the gh on PATH (scripts/build.sh)
+# Development build for this Mac (runs GH_TOUCHID_GH or the gh on PATH), gh-touchid-adapter beside it (scripts/build.sh)
 build output="build/gh-touchid" *args:
     scripts/build.sh --output {{ output }} {{ args }}
 

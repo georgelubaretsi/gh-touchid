@@ -184,7 +184,7 @@ extension Prompt {
         )
     }
 
-    /// `app login`, and the end of `app create` and `app set` (`storesApp`): your sign-in to the owner's App.
+    /// `app login`, and the end of `app create` and `app add` (`storesApp`): your sign-in to the owner's App.
     static func signIn(_ login: String, owner: String, app: String?, storesApp: Bool) -> Prompt {
         var rows = [
             Row(key: "action", value: storesApp ? "store app and sign in" : "sign in", emphasis: .strong),
@@ -217,6 +217,28 @@ extension Prompt {
             ],
             allowLabel: "allow",
             fallback: "store a GitHub token for \(login)"
+        )
+    }
+
+    /// `reader create` and `reader add`: the reader App and its key, which gh then uses for public data without
+    /// asking; `replacing` is the slug of the reader stored now, if any.
+    static func reader(_ slug: String, owner: String, replacing previous: String?) -> Prompt {
+        var rows = [
+            Row(key: "action", value: previous == nil ? "store reader" : "replace reader key", emphasis: .strong),
+            Row(key: "app", value: slug, emphasis: .strong),
+            Row(key: "owner", value: owner),
+        ]
+        if let previous, previous != slug {
+            rows.append(Row(key: "replaces", value: previous))
+        }
+        rows += [
+            Row(key: "access", value: "public data, for gh without asking"),
+            Row(key: "scope", value: "until removed", emphasis: .warning),
+        ]
+        return Prompt(
+            rows: rows,
+            allowLabel: "allow",
+            fallback: "store the reader App \(slug) of \(owner), which gh uses for public data without asking"
         )
     }
 }
@@ -274,9 +296,9 @@ private func repositoryLines(_ repositories: [String]) -> String {
     return lines.joined(separator: "\n")
 }
 
-/// Processes that only pass a request along: shells, Git, gh, gh-touchid and launchers.
+/// Processes that only pass a request along: shells, Git, gh, gh-touchid and its rpc/mcp adapter, and launchers.
 private let plumbingNames: Set<String> = shellNames.union([
-    "fish", "git", "git-remote-http", "git-remote-https", "gh", "gh-touchid", "gh-touchid-test",
+    "fish", "git", "git-remote-http", "git-remote-https", "gh", "gh-touchid", "gh-touchid-test", "gh-touchid-adapter",
     "env", "nix", "xargs", "timeout", "nohup", "time", "sudo", "script",
 ])
 

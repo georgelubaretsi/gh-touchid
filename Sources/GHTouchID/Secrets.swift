@@ -8,6 +8,8 @@ import Security
 // - service `com.lubaretsi.gh-touchid.signin`, account = owner: your sign-in to that App as JSON {login, accessToken,
 //   accessExpires, refreshToken, refreshExpires} (expiries in seconds since 1970), and the login as its comment
 // - service `com.lubaretsi.gh-touchid.user`, account = login: a token of one of your GitHub accounts, used by `as`
+// - service `com.lubaretsi.gh-touchid.reader`, account `reader`: the reader App (public read access for gh) as JSON
+//   {appId, privateKey} (the PKCS#1 PEM GitHub made), and JSON {"app": slug, "owner": login} as the item's comment
 // Every item's description says its format (`gh-touchid format 1`; see `itemFormat`). Accounts are lowercase.
 // gh's own sign-in, service `gh:github.com`, is only looked up, to tell whether another gh is signed in.
 // Listing, existence checks, the formats, the App's slug and the signed-in login read attributes only, never a secret.
@@ -27,6 +29,7 @@ enum StoredItem: CustomStringConvertible {
     case app(owner: String)
     case signIn(owner: String)
     case account(login: String)
+    case reader
 
     fileprivate var service: String {
         switch self {
@@ -36,6 +39,8 @@ enum StoredItem: CustomStringConvertible {
             return signInService
         case .account:
             return userService
+        case .reader:
+            return readerService
         }
     }
 
@@ -45,6 +50,8 @@ enum StoredItem: CustomStringConvertible {
             return owner
         case let .account(login):
             return login
+        case .reader:
+            return readerAccount
         }
     }
 
@@ -56,6 +63,8 @@ enum StoredItem: CustomStringConvertible {
             return "sign-in to the \(owner) App"
         case let .account(login):
             return "token of \(login)"
+        case .reader:
+            return "reader App"
         }
     }
 
@@ -68,6 +77,8 @@ enum StoredItem: CustomStringConvertible {
             return "run `gh-touchid app login \(owner)`"
         case let .account(login):
             return "run `gh-touchid account add \(login)`"
+        case .reader:
+            return "run `gh-touchid reader add --app-id <id> < key.pem`"
         }
     }
 }
@@ -132,6 +143,9 @@ private let servicePrefix: String = {
 private let appService = "\(servicePrefix).app"
 private let signInService = "\(servicePrefix).signin"
 private let userService = "\(servicePrefix).user"
+private let readerService = "\(servicePrefix).reader"
+/// There is at most one reader per Mac, so its item has a fixed account.
+private let readerAccount = "reader"
 
 /// The owner's GitHub App as gh-touchid uses it: the OAuth client you sign in to, which narrows your tokens.
 struct AppCredentials: Codable {
@@ -169,6 +183,91 @@ func appSlug(owner: String) -> String? {
 /// Owners with a stored App.
 func storedAppOwners() throws -> [String] {
     try storedAccounts(service: appService)
+}
+
+/// Removes the owner's App; false when none was stored.
+@discardableResult
+func removeAppCredentials(owner: String) throws -> Bool {
+    try deleteSecret(service: appService, account: owner)
+}
+
+/// The reader App's secret half: its ID and the private key that signs its JWTs (PKCS#1 PEM).
+struct ReaderSecret: Codable {
+    let appId: Int
+    let privateKey: String
+}
+
+/// The reader App's public half, kept as the item's comment so that `status` and every use read it from attributes.
+struct ReaderLabel {
+    /// The App's slug: its bot acts as `<slug>[bot]`.
+    let slug: String
+    /// The user account the App belongs to and is installed on.
+    let owner: String
+}
+
+/// Stores the reader, replacing any; Touch ID comes first, at the caller.
+func storeReader(_ secret: ReaderSecret, label: ReaderLabel) throws {
+    let data = try JSONEncoder().encode(secret)
+    let comment = try JSONSerialization.data(
+        withJSONObject: ["app": label.slug, "owner": label.owner],
+        options: [.sortedKeys]
+    )
+    try storeSecret(
+        data,
+        service: readerService,
+        account: readerAccount,
+        label: "gh-touchid reader \(label.slug)",
+        comment: String(decoding: comment, as: UTF8.self)
+    )
+}
+
+/// The reader's ID and key; checks the item's format first.
+func loadReader() throws -> ReaderSecret {
+    try checkFormat(.reader)
+    guard let data = try loadSecret(service: readerService, account: readerAccount) else {
+        throw ToolError.readerMissing
+    }
+    guard let secret = try? JSONDecoder().decode(ReaderSecret.self, from: data), secret.appId > 0 else {
+        throw ToolError.keychain("the stored reader is not valid; \(StoredItem.reader.storeAgain)")
+    }
+    return secret
+}
+
+func hasReader() -> Bool {
+    hasSecret(service: readerService, account: readerAccount)
+}
+
+/// The reader's slug and owner, read from its attributes; nil when there is no reader or its comment is not readable.
+func readerLabel() -> ReaderLabel? {
+    guard let comment = secretComment(service: readerService, account: readerAccount),
+          let object = try? JSONSerialization.jsonObject(with: Data(comment.utf8)) as? [String: Any],
+          let slug = (object["app"] as? String).flatMap(validOwner),
+          let owner = (object["owner"] as? String).flatMap(validOwner) else {
+        return nil
+    }
+    return ReaderLabel(slug: slug, owner: owner)
+}
+
+/// The reader as `status` shows it, from its attributes only: `{"app": slug, "owner": login}`, plus `problem` when
+/// its format or comment cannot be read (then `app` and `owner` may be empty); nil when no reader is stored.
+func readerStatus() -> [String: Any]? {
+    guard hasReader() else {
+        return nil
+    }
+    let label = readerLabel()
+    var status: [String: Any] = ["app": label?.slug ?? "", "owner": label?.owner ?? ""]
+    if let problem = formatProblem(.reader) {
+        status["problem"] = problem
+    } else if label == nil {
+        status["problem"] = "its App and owner are not readable: \(StoredItem.reader.storeAgain)"
+    }
+    return status
+}
+
+/// Removes the reader; false when none was stored.
+@discardableResult
+func removeReader() throws -> Bool {
+    try deleteSecret(service: readerService, account: readerAccount)
 }
 
 /// Your sign-in to an owner's App: an expiring user access token and the refresh token that renews it.

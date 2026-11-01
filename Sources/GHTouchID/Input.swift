@@ -4,21 +4,6 @@ import Foundation
 /// The longest `elevate`.
 let longestElevation: TimeInterval = 24 * 60 * 60
 
-/// `--name value` options; each name maps to its values in order.
-func parseOptions(_ arguments: [String], allowed: Set<String>) throws -> [String: [String]] {
-    var options: [String: [String]] = [:]
-    var index = 0
-    while index < arguments.count {
-        let name = arguments[index]
-        guard allowed.contains(name), index + 1 < arguments.count else {
-            throw ToolError.usage
-        }
-        options[name, default: []].append(arguments[index + 1])
-        index += 2
-    }
-    return options
-}
-
 /// `30m`, `8h`, `1h30m`, `1d`: at most one day.
 func parseDuration(_ text: String) throws -> TimeInterval {
     let pattern = #"^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$"#
@@ -109,13 +94,13 @@ func readToken(prompt: String = "GitHub token: ") throws -> String {
 
     var original = termios()
     guard tcgetattr(STDIN_FILENO, &original) == 0 else {
-        throw ToolError.input("cannot read terminal settings")
+        throw ToolError.refused("cannot read terminal settings")
     }
 
     var hidden = original
     hidden.c_lflag &= ~tcflag_t(ECHO)
     guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden) == 0 else {
-        throw ToolError.input("cannot disable terminal echo")
+        throw ToolError.refused("cannot disable terminal echo")
     }
 
     defer {

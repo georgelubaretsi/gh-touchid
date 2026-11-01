@@ -9,8 +9,9 @@ class GhTouchid < Formula
 
   def install
     bin.install "bin/gh-touchid"
-    # libexec/bin/gh, which runs gh through gh-touchid, outside bin so that it sits beside Homebrew's gh; and GitHub's
-    # gh in libexec/gh-touchid, which gh-touchid finds next to its own executable and checks before running it
+    # libexec/bin/gh, which runs gh through gh-touchid, outside bin so that it sits beside Homebrew's gh; and in
+    # libexec/gh-touchid GitHub's gh, which gh-touchid finds next to its own executable and checks before running it,
+    # and gh-touchid-adapter, which `gh-touchid rpc` and `gh-touchid mcp` run
     libexec.install "libexec/bin", "libexec/gh-touchid"
   end
 
@@ -33,6 +34,9 @@ class GhTouchid < Formula
 
   test do
     system bin/"gh-touchid", "help"
+    # `gh-touchid rpc` finds the adapter in libexec and answers a call that reads nothing stored
+    request = '{"jsonrpc":"2.0","id":1,"method":"version","params":{}}'
+    assert_match(/"result":\{"version":"\d+(\.\d+)*"\}/, pipe_output("#{bin}/gh-touchid rpc", "#{request}\n", 0))
     # Running gh through the wrapper needs a token from gh-touchid (Touch ID and a stored App or account), even for
     # `gh --version`, so the test checks only that the wrapper is installed where the caveats point.
     assert_predicate opt_libexec/"bin/gh", :executable?

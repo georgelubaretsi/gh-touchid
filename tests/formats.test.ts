@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { services, TestEnv } from "./support/harness";
+import { readerAccount, readerService, seedReader } from "./support/reader";
 
 const current = "gh-touchid format 1";
 
@@ -109,5 +110,54 @@ describe("items whose format cannot be read", () => {
     expect(result.auth).toEqual([]);
     expect(result.stderr).toContain("gh-touchid account add alice");
     expect(env.ghCalls()).toEqual([]);
+  });
+});
+
+describe("the reader item", () => {
+  test("in format 1, with or without a description, is read: gh gets a reader token", async () => {
+    await using env = await TestEnv.create();
+    const reader = seedReader(env);
+    expect(env.description(readerService, readerAccount)).toBeUndefined();
+    expect((await env.run(["gh", "-R", "someone/project", "issue", "list"])).status).toBe(0);
+    env.writeFormat(readerService, readerAccount, 1);
+    expect((await env.run(["gh", "-R", "someone/project", "issue", "list"])).status).toBe(0);
+    expect(env.mock.installationTokens()).toHaveLength(2);
+    const status = JSON.parse((await env.run(["--json", "status"])).stdout);
+    expect(status.reader).toEqual({ app: reader.slug, owner: reader.owner });
+  });
+
+  test("in format 2 is refused before any token is made, and status says to upgrade", async () => {
+    await using env = await TestEnv.create();
+    seedReader(env);
+    env.writeFormat(readerService, readerAccount, 2);
+    const result = await env.run(["gh", "-R", "someone/project", "issue", "list"]);
+    expect(result.status).toBe(1);
+    expect(result.auth).toEqual([]);
+    expect(result.stderr).toContain("newer gh-touchid");
+    expect(result.stderr).toContain("format 2");
+    expect(env.mock.requests).toEqual([]);
+    expect(env.ghCalls()).toEqual([]);
+    const status = JSON.parse((await env.run(["--json", "status"])).stdout);
+    expect(status.reader.problem).toBe("stored by a newer gh-touchid: upgrade it");
+  });
+
+  test("with a description that is not a format is refused before any token is made, naming reader add", async () => {
+    await using env = await TestEnv.create();
+    seedReader(env);
+    env.writeDescription(readerService, readerAccount, "gh-touchid format two");
+    const result = await env.run(["gh", "-R", "someone/project", "issue", "list"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("does not say a format");
+    expect(result.stderr).toContain("gh-touchid reader add --app-id <id> < key.pem");
+    expect(env.mock.requests).toEqual([]);
+    expect(env.ghCalls()).toEqual([]);
+  });
+
+  test("is written in the current format by reader add", async () => {
+    await using env = await TestEnv.create();
+    const app = env.mock.seedReaderApp("octo");
+    env.mock.seedInstallation(app, "octo");
+    expect((await env.run(["reader", "add", "--app-id", String(app.id)], { stdin: app.pem })).status).toBe(0);
+    expect(env.description(readerService, readerAccount)).toBe(current);
   });
 });

@@ -46,7 +46,7 @@ describe("session", () => {
   test("outside a repository, without --repo, there is nothing to register", async () => {
     await using env = await TestEnv.create();
     const result = await env.run(["session"]);
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(env.agentSockets()).toEqual([]);
   });
 
@@ -54,7 +54,7 @@ describe("session", () => {
     await using env = await TestEnv.create();
     for (const args of [["session", "--repo", "widgets"], ["session", "--repo", "a/b/c"]]) {
       const result = await env.run(args);
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
     }
     expect((await env.run(["session", "--repo"])).status).toBe(2);
     expect((await env.run(["session", "--for", "1h"])).status).toBe(2);
@@ -119,7 +119,7 @@ describe("elevate", () => {
     ];
     for (const args of invalid) {
       const result = await env.run(args);
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
       expect(result.auth).toEqual([]);
     }
     expect(env.agentSockets()).toEqual([]);

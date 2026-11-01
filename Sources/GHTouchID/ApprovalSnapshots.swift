@@ -122,9 +122,11 @@ func renderPrompts(into directory: String) throws -> Int32 {
         ("account-no-repository", .acting(as: "mona", by: agent, use: ghUse(["api", "user"]), repository: nil)),
         ("app-create", .newApp("acme-touchid", owner: "acme")),
         ("app-create-sign-in", .signIn("octocat", owner: "acme", app: "acme-touchid", storesApp: true)),
-        ("app-set", .signIn("octocat", owner: "acme", app: nil, storesApp: true)),
+        ("app-add", .signIn("octocat", owner: "acme", app: nil, storesApp: true)),
         ("app-login", .signIn("octocat", owner: "acme", app: "acme-touchid", storesApp: false)),
         ("account-add", .accountToken("octocat")),
+        ("reader-create", .reader("gh-touchid-reader-1a2b3c", owner: "octocat", replacing: nil)),
+        ("reader-add", .reader("gh-touchid-reader-1a2b3c", owner: "octocat", replacing: "gh-touchid-reader-1a2b3c")),
     ]
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     return try MainActor.assumeIsolated {

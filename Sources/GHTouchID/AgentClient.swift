@@ -31,9 +31,13 @@ private func reportUntrustedHolder(_ holder: String, _ peer: PeerIdentity) {
     )
 }
 
+/// The protocol this command speaks to the agent: `agentProtocol`, or an earlier one the agent named when it refused
+/// that one, if this build speaks it too (an earlier release's agent, which this one trusts).
+private var spokenProtocol = agentProtocol
+
 /// `request` with the protocol and version every request to the agent carries.
 private func versioned(_ request: [String: Any]) -> [String: Any] {
-    request.merging(["protocol": agentProtocol, "version": toolVersion]) { _, new in new }
+    request.merging(["protocol": spokenProtocol, "version": toolVersion]) { _, new in new }
 }
 
 /// Whether `reply` is the agent's refusal of a request in a protocol it does not speak.
@@ -44,7 +48,7 @@ private func isProtocolRefusal(_ reply: [String: Any]) -> Bool {
 private func reportProtocolRefusal(_ reply: [String: Any]) {
     let version = printable(reply["version"] as? String ?? "unknown", limit: 40)
     reportAgentProblem(
-        "the background program (gh-touchid \(version)) does not speak protocol \(agentProtocol); "
+        "the background program (gh-touchid \(version)) does not speak protocol \(spokenProtocol); "
             + "no session applies, so each use asks for Touch ID"
     )
 }
@@ -61,6 +65,12 @@ private func agentRequest(_ request: [String: Any], takingOver: Bool) -> [String
     switch exchange(agentSocketPath, versioned(request), accepts: \.isTrusted) {
     case let .answered(reply, _):
         guard !isProtocolRefusal(reply) else {
+            // the refusal acted on nothing: ask again, once, in the agent's protocol when this build speaks it
+            if let theirs = reply["protocol"] as? Int, spokenProtocol == agentProtocol, theirs != agentProtocol,
+               agentProtocols.contains(theirs) {
+                spokenProtocol = theirs
+                return agentRequest(request, takingOver: takingOver)
+            }
             reportProtocolRefusal(reply)
             return nil
         }

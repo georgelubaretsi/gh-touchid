@@ -4,25 +4,39 @@ import Foundation
 // Who gets a token for repository R, decided by the client that needs it:
 // 1. Acting as one of your accounts (`as <login>`, GH_TOUCHID_AS=<login>): Touch ID for every use, sessions or not,
 //    then that account's token.
-// 2. R's owner has no App stored, or you are not signed in to it: refused before any dialog.
-// 3. Inside an approved session that lists R: a token for R, acting as you through the App, without Touch ID. The
+// 2. gh for no repository, or for an R whose owner has no App stored: the reader's token, without Touch ID, when a
+//    reader is stored and the command does not open an issue (IssueCheck.swift); otherwise refused before any dialog.
+//    Git never uses the reader: it reads public repositories without a credential.
+// 3. R's owner has no App stored (Git), or you are not signed in to it: refused before any dialog.
+// 4. Inside an approved session that lists R: a token for R, acting as you through the App, without Touch ID. The
 //    session may be held by the agent or, in builds that share agent.sock, by an agent of 0.4.0/0.4.1.
-// 4. Inside an approved session that does not list R: an issue-only token; for a public R, Touch ID for this use
+// 5. Inside an approved session that does not list R: an issue-only token; for a public R, Touch ID for this use
 //    first, and nothing for Git.
-// 5. Inside a pending session: one Touch ID approves the session, then as 3 or 4.
-// 6. Anything else: Touch ID naming the command and who asked, then one token for R.
-// Tokens of 3–6 come from your sign-in to R's owner's App, narrowed to R; they include `workflows` only if R is
-// elevated when the token is made, which is after any dialog; issue-only tokens never do. Every outcome is logged
-// with the process chain.
+// 6. Inside a pending session: one Touch ID approves the session, then as 4 or 5.
+// 7. Anything else: Touch ID naming the command and who asked, then one token for R.
+// Tokens of 4–7 come from your sign-in to R's owner's App, narrowed to R; they include `workflows` only if R is
+// elevated when the token is made, which is after any dialog; issue-only tokens never do. Reader tokens have no
+// permissions and reach no repository, which GitHub confirms for each before gh gets it (Reader.swift). Every outcome
+// is logged with the process chain.
 
 struct GitHubCredential {
     let token: String
     /// What Git sends as the username with it.
     let username: String
-    /// When a narrowed token expires; nil for an account's token, which is neither revoked nor expires here.
+    /// When a narrowed or reader token expires; nil for an account's token, which is neither revoked nor expires here.
     let expires: Date?
-    /// The App that narrowed the token, which revokes it after use; nil for an account's token.
-    let app: AppCredentials?
+    /// How the token is ended after its use.
+    let revocation: TokenRevocation
+}
+
+/// How a handed-out token is ended after its use.
+enum TokenRevocation {
+    /// An account's own token, which stays.
+    case none
+    /// A token narrowed from your sign-in, revoked with the App's client ID and secret.
+    case scoped(AppCredentials)
+    /// A reader installation token, revoked with itself.
+    case installation
 }
 
 /// A session as an agent reports it.
@@ -83,11 +97,13 @@ enum Grant {
     case app(session: SessionInfo?)
     /// An issue-only token, for a repository the session does not list.
     case issues(session: SessionInfo)
+    /// The reader's token: public data only, for gh with no repository or an owner without an App.
+    case reader
 }
 
 /// A use that Touch ID or a session allowed; the token is issued separately, right after.
 struct Authorization {
-    /// nil only when acting as an account and no repository could be told.
+    /// nil when acting as an account or using the reader, and no repository could be told.
     let repository: String?
     let grant: Grant
     /// What asked, as the dialog shows it: `gh pr list`, `git push`, with what gh-touchid could tell about it.
@@ -100,8 +116,15 @@ struct Authorization {
     }
 }
 
-/// Touch ID or session approval for one use of `repository` by `use`, as `account` when one is given.
-func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool) throws -> Authorization {
+/// Touch ID or session approval for one use of `repository` by `use`, as `account` when one is given; for gh,
+/// `arguments` are gh's, which decide whether the reader may serve the use.
+func authorizeUse(
+    repository: String?,
+    use: Use,
+    account: String?,
+    forGit: Bool,
+    arguments: [String]?
+) throws -> Authorization {
     let chain = processChain(getpid())
     let target = repository ?? "no repository"
     func authorized(_ grant: Grant) -> Authorization {
@@ -116,6 +139,22 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
             try authenticate(.acting(as: account, by: requester(), use: use, repository: repository))
             return authorized(.account(account))
         }
+        // gh with nothing of yours to act through: the reader, or a refusal before anyone is asked
+        if !forGit, repository.map({ !hasAppCredentials(owner: ownerAccount($0)) }) ?? true {
+            guard hasReader() else {
+                guard let repository else {
+                    throw ToolError.readerMissing
+                }
+                let logins = (try? storedUserLogins()) ?? []
+                throw ToolError.noApp(owner: ownerAccount(repository), logins: logins, program: "gh")
+            }
+            try checkFormat(.reader)
+            // checked before any token is made; arguments that cannot be checked are refused alike
+            guard let arguments, !opensIssue(arguments) else {
+                throw ToolError.readerOpensIssue
+            }
+            return authorized(.reader)
+        }
         guard let repository else {
             throw ToolError.missingRepository
         }
@@ -123,7 +162,7 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
         let owner = ownerAccount(repository)
         guard hasAppCredentials(owner: owner) else {
             let logins = (try? storedUserLogins()) ?? []
-            throw ToolError.noApp(owner: owner, logins: logins, program: forGit ? "git" : "gh")
+            throw ToolError.noApp(owner: owner, logins: logins, program: "git")
         }
         guard hasSignIn(owner: owner) else {
             throw ToolError.notSignedIn(owner)
@@ -162,7 +201,7 @@ func authorizeUse(repository: String?, use: Use, account: String?, forGit: Bool)
     }
 }
 
-/// The token for an authorized use: an account's own, or one narrowed from your sign-in.
+/// The token for an authorized use: an account's own, one narrowed from your sign-in, or the reader's.
 func issueCredential(_ authorization: Authorization) throws -> GitHubCredential {
     let chain = authorization.chain
     do {
@@ -170,7 +209,7 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
         case let .account(login):
             let token = try loadUserToken(login: login)
             appendAccessLog("granted \(authorization.target) (as \(login)) to \(chain)")
-            return GitHubCredential(token: token, username: login, expires: nil, app: nil)
+            return GitHubCredential(token: token, username: login, expires: nil, revocation: .none)
         case let .app(session):
             guard let repository = authorization.repository else {
                 throw ToolError.missingRepository
@@ -182,12 +221,27 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
             appendAccessLog(
                 "granted \(repository) (\(grant))\(elevated ? ", elevated" : "") as \(token.login) to \(chain)"
             )
-            return GitHubCredential(token: token.token, username: token.login, expires: token.expires, app: token.app)
+            return GitHubCredential(
+                token: token.token,
+                username: token.login,
+                expires: token.expires,
+                revocation: .scoped(token.app)
+            )
         case let .issues(session):
             guard let repository = authorization.repository else {
                 throw ToolError.missingRepository
             }
             return try issueOnlyCredential(repository: repository, session: session, authorization: authorization)
+        case .reader:
+            let (token, label) = try mintStoredReaderToken()
+            fputs("\(readerNotice(slug: label.slug))\n", stderr)
+            appendAccessLog("granted \(authorization.target) (reader \(label.slug)) to \(chain)")
+            return GitHubCredential(
+                token: token.token,
+                username: "x-access-token",
+                expires: token.expires,
+                revocation: .installation
+            )
         }
     } catch {
         appendAccessLog("refused \(authorization.target) to \(chain): \(error)")
@@ -208,7 +262,7 @@ private func issueOnlyCredential(
         token: minted.token,
         username: minted.login,
         expires: minted.expires,
-        app: minted.app
+        revocation: .scoped(minted.app)
     )
     let grant = "session \(session.label)"
     do {
@@ -286,13 +340,20 @@ private func awaitApproval(of session: SessionInfo) throws {
     throw ToolError.authenticationNotAnswered
 }
 
-/// Ends a narrowed token after its single use; a failure is reported and logged, not fatal.
+/// Ends a narrowed or reader token after its single use; a failure is reported and logged, not fatal.
 func revokeAfterUse(_ credential: GitHubCredential, repository: String) {
-    guard let app = credential.app, let expires = credential.expires else {
+    guard let expires = credential.expires else {
         return
     }
     do {
-        try revokeScopedToken(credential.token, app: app)
+        switch credential.revocation {
+        case .none:
+            return
+        case let .scoped(app):
+            try revokeScopedToken(credential.token, app: app)
+        case .installation:
+            try revokeInstallationToken(credential.token)
+        }
     } catch {
         fputs("gh-touchid: could not revoke the token for \(repository); it expires at \(localTime(expires)): \(error)\n", stderr)
         appendAccessLog("could not revoke the token for \(repository): \(error)")

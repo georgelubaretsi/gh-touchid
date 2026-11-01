@@ -7,6 +7,16 @@ import { TestEnv } from "./support/harness";
 
 const aliceToken = "ghp_alice0000000000000000000000000000";
 
+/** The `{"error": {...}}` line `--json` ends stderr with. */
+function lastError(stderr: string): { code: string; message: string } | undefined {
+  const line = stderr.trimEnd().split("\n").at(-1) ?? "";
+  try {
+    return JSON.parse(line).error;
+  } catch {
+    return undefined;
+  }
+}
+
 describe("forbidden gh commands", () => {
   const forbidden = [
     ["auth", "token"],
@@ -52,7 +62,7 @@ describe("forbidden gh commands", () => {
 });
 
 describe("refusals before Touch ID", () => {
-  test("an owner without an App is refused, naming the stored accounts", async () => {
+  test("an owner without an App and no reader is refused, naming reader create first, then the stored accounts", async () => {
     await using env = await TestEnv.create();
     env.seedAccount("alice", aliceToken);
     env.seedAccount("bob", "ghp_bob");
@@ -64,6 +74,9 @@ describe("refusals before Touch ID", () => {
       expect(result.stderr).toContain("alice");
       expect(result.stderr).toContain("bob");
       expect(result.stderr).toContain("gh-touchid as <login> -- gh");
+      const reader = result.stderr.indexOf("gh-touchid reader create");
+      expect(reader).toBeGreaterThan(-1);
+      expect(reader).toBeLessThan(result.stderr.indexOf("gh-touchid as <login>"));
     }
     expect(env.ghCalls()).toEqual([]);
     expect(env.mock.requests).toEqual([]);
@@ -76,24 +89,26 @@ describe("refusals before Touch ID", () => {
     expect(result.status).toBe(1);
     expect(result.auth).toEqual([]);
     expect(result.stderr).toContain("account add");
+    expect(result.stderr).toContain("reader create");
     expect(env.ghCalls()).toEqual([]);
   });
 
-  test("outside a repository, with no repository named and no account, the repository is missing", async () => {
+  test("outside a repository, with no repository named, no account and no reader: refused, naming reader create", async () => {
     await using env = await TestEnv.create();
     env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret" });
-    const result = await env.run(["gh", "issue", "list"]);
+    const result = await env.run(["--json", "gh", "issue", "list"]);
     expect(result.status).toBe(1);
     expect(result.auth).toEqual([]);
-    expect(result.stderr).toMatch(/origin/);
+    expect(result.stderr).toContain("gh-touchid reader create");
+    expect(lastError(result.stderr)?.code).toBe("reader_missing");
     expect(env.ghCalls()).toEqual([]);
     expect(env.mock.requests).toEqual([]);
   });
 
-  test("a repository that is not on GitHub is refused", async () => {
+  test("a repository that is not on GitHub is invalid input", async () => {
     await using env = await TestEnv.create();
     const result = await env.run(["gh", "-R", "gitlab.com/acme/widgets", "issue", "list"]);
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.auth).toEqual([]);
     expect(env.ghCalls()).toEqual([]);
   });
@@ -168,12 +183,12 @@ describe("acting as an account", () => {
     expect(env.ghCalls()).toEqual([]);
   });
 
-  test("an invalid login is refused", async () => {
+  test("an invalid login is invalid input", async () => {
     await using env = await TestEnv.create();
     const as = await env.run(["as", "not a login", "gh", "api", "user"]);
-    expect(as.status).toBe(1);
+    expect(as.status).toBe(2);
     const variable = await env.run(["gh", "api", "user"], { env: { GH_TOUCHID_AS: "not/a/login" } });
-    expect(variable.status).toBe(1);
+    expect(variable.status).toBe(2);
     expect([...as.auth, ...variable.auth]).toEqual([]);
     expect(env.ghCalls()).toEqual([]);
   });

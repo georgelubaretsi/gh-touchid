@@ -4,7 +4,10 @@ import Foundation
 // Tokens that act as you, through the owner's GitHub App. Your sign-in to the App (an expiring user access token,
 // renewed with its refresh token) never leaves gh-touchid: each use narrows it to one repository and the permissions
 // that use may have (`POST /applications/{client_id}/token/scoped`), and that token is revoked after gh. gh-touchid
-// never acts as the App: it holds no key for it, only the client secret that lets it narrow and revoke your tokens.
+// does not act as an owner's App: it holds no key for one, only the client secret that lets it narrow and revoke your
+// tokens. The one App gh-touchid acts as is the reader (Reader.swift), whose key it holds: an App with no permissions,
+// installed on no repository, so its tokens read public data and GitHub refuses them most writes; the one write GitHub
+// lets through, opening an issue, gh-touchid refuses before a token is made (IssueCheck.swift).
 
 /// A token for one repository that acts as `login`, and the App that made it (to revoke it).
 struct ScopedToken {
@@ -91,6 +94,22 @@ func revokeScopedToken(_ token: String, app: AppCredentials) throws {
     }
 }
 
+/// Ends your sign-in's grant to the App (`DELETE /applications/{client_id}/grant`): GitHub revokes every token the
+/// sign-in made, and the App no longer appears among your authorized Apps. A grant GitHub does not know is already
+/// gone.
+func revokeGrant(app: AppCredentials, accessToken: String) throws {
+    let response = try githubAPI(
+        "DELETE",
+        "/applications/\(app.clientId)/grant",
+        bearer: nil,
+        basic: app,
+        body: ["access_token": accessToken]
+    )
+    guard response.status == 204 || response.status == 404 else {
+        throw ToolError.github("GitHub did not end the sign-in's grant (HTTP \(response.status): \(response.message))")
+    }
+}
+
 /// The permissions of the owner's installation of the App, as your sign-in sees it (`GET /user/installations`, page by
 /// page: an App installed on many accounts lists the owner's wherever GitHub puts it).
 private func installationPermissions(owner: String, token: String) throws -> [String: Any] {
@@ -129,7 +148,7 @@ func installHint(owner: String) -> String {
 }
 
 /// The owner's App and your sign-in to it with at least `renewalMargin` left, renewed first when needed. Both are read
-/// under the owner's sign-in lock, so that an `app create`, `app set` or `app login` storing a new pair meanwhile can
+/// under the owner's sign-in lock, so that an `app create`, `app add` or `app login` storing a new pair meanwhile can
 /// never leave this use with one App's secret and another's sign-in. Renewing replaces the refresh token (GitHub
 /// accepts each one once); other gh-touchid processes for the same owner wait for the lock and then find the renewed
 /// sign-in.
@@ -164,12 +183,12 @@ func withSignInLock<T>(owner: String, _ body: () throws -> T) throws -> T {
     let path = (sessionDirectory as NSString).appendingPathComponent("signin-\(owner).lock")
     let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
     guard fd >= 0 else {
-        throw ToolError.input("cannot open \(path): \(String(cString: strerror(errno)))")
+        throw ToolError.refused("cannot open \(path): \(String(cString: strerror(errno)))")
     }
     defer { close(fd) }
     while flock(fd, LOCK_EX) != 0 {
         guard errno == EINTR else {
-            throw ToolError.input("cannot lock \(path): \(String(cString: strerror(errno)))")
+            throw ToolError.refused("cannot lock \(path): \(String(cString: strerror(errno)))")
         }
     }
     return try body()
