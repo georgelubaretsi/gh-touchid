@@ -1,6 +1,7 @@
 import AppKit
 import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
+import QuartzCore
 import SwiftUI
 
 // The approval window: what a prompt asks in labelled rows, Touch ID embedded in the window (LAAuthenticationView)
@@ -41,7 +42,12 @@ func approveInWindow(_ prompt: Prompt, context: LAContext) throws {
 
     NSApp.runModal(for: window)
     timeout.cancel()
+    // AppKit takes a window off the screen when its changes are committed, on the next turn of the run loop; the
+    // caller may block the main thread right after (`reader create` and `setup` wait for the browser), which left the
+    // window on screen, frozen at "approval needed", until the process exited. Commit now.
     window.orderOut(nil)
+    window.close()
+    CATransaction.flush()
     if let failure = answer.failure {
         throw failure
     }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- After Touch ID, the approval window left the screen only when gh-touchid exited, so it stayed, frozen at
+  "approval needed", while the command went on: through `reader create`'s and `setup`'s browser steps, and while a
+  long gh command ran. It now goes as soon as Touch ID answers.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added

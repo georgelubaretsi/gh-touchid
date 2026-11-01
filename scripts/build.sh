@@ -189,6 +189,7 @@ for architecture in arm64 x86_64; do
     -framework CryptoKit \
     -framework LocalAuthentication \
     -framework LocalAuthenticationEmbeddedUI \
+    -framework QuartzCore \
     -framework Security
 done
 mkdir -p "$(dirname "$output")"
