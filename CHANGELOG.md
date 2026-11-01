@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
 ### Added
 
 - A public reader. `gh-touchid reader create` makes a GitHub App with no permissions on your account. After that, a
