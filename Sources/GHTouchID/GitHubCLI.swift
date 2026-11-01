@@ -409,13 +409,16 @@ final class OutputCapture {
 }
 
 /// Runs `program` (looked up on PATH) with `arguments` and `environment`, its streams in `capture`'s files, and
-/// returns its exit status: `as <login> <command>` with `--json`.
+/// returns its exit status: `as <login> <command>` with `--json`. Signals to gh-touchid are passed on to it, as to gh,
+/// so that a cancelled `rpc` or `mcp` call (SIGTERM to the core) ends the command too rather than leaving it running.
 func runCapturedCommand(
     _ program: String,
     arguments: [String],
     environment: [String: String],
     capture: OutputCapture
 ) throws -> Int32 {
+    let relay = SignalRelay()
+    defer { relay.remove() }
     let pid = try spawn(
         program,
         arguments,
@@ -424,5 +427,8 @@ func runCapturedCommand(
         streams: try capture.streams(),
         searchPath: true
     )
-    return waitForExit(pid)
+    relay.attach(pid)
+    let status = waitForExit(pid)
+    relay.detach()
+    return status
 }

@@ -5,7 +5,8 @@
 // sees the client, not the adapter, as the program that asked.
 
 import { describe, expect, test } from "bun:test";
-import { basename } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { isRunning, StdioClient, waitForExit } from "./support/adapter";
 import { builds, services, TestEnv } from "./support/harness";
 
@@ -216,6 +217,27 @@ describe("gh-touchid rpc", () => {
     expect(isRunning(core!)).toBe(false);
     expect(env.ghEvents().map((event) => event.signal ?? event.kind)).toEqual(["run", "SIGTERM"]);
     expect(env.mock.scopedTokens()[0]!.revoked).toBe(true);
+  });
+
+  test("notifications/cancelled of an `as` call ends the command it runs, not only its core", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("bob", "ghp_bob");
+    await using rpc = StdioClient.start(env, "rpc");
+    const pidFile = join(env.dir, "command.pid");
+    const id = rpc.begin("as", { login: "bob", argv: ["/bin/sh", "-c", `echo $$ > ${pidFile}; exec /bin/sleep 30`] });
+    // the command, a real process, writes its pid: poll for the file (no event to await), up to a deadline
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(pidFile) || readFileSync(pidFile, "utf8").trim() === "") {
+      expect(Date.now()).toBeLessThan(deadline);
+      await Bun.sleep(20);
+    }
+    const command = Number(readFileSync(pidFile, "utf8").trim());
+    expect(isRunning(command)).toBe(true);
+
+    rpc.notify("notifications/cancelled", { requestId: id });
+    const reply = await rpc.response(id);
+    expect(reply.error.code).toBe(-32800);
+    await waitForExit(command);
   });
 
   test("closing standard input answers the calls still running, then exits", async () => {
