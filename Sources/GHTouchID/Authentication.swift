@@ -11,7 +11,8 @@ private final class AuthenticationResult: @unchecked Sendable {
 }
 
 /// Touch ID for `prompt`: in the approval window, or in macOS's own sheet (with `prompt.fallback`) where no window
-/// can be shown. Test builds print `AUTH: <fallback>` instead and never show either.
+/// can be shown. Test builds print `AUTH: <fallback>` instead and show neither, except the approval window with
+/// GH_TOUCHID_TEST_APPROVAL_WINDOW=1, which they answer themselves (`testApprovalWindow`).
 func authenticate(_ prompt: Prompt) throws {
 #if GH_TOUCHID_TESTING
     let environment = ProcessInfo.processInfo.environment
@@ -19,6 +20,9 @@ func authenticate(_ prompt: Prompt) throws {
         throw ToolError.screenLocked
     }
     fputs("AUTH: \(prompt.fallback)\n", stderr)
+    if environment["GH_TOUCHID_TEST_APPROVAL_WINDOW"] == "1" {
+        try testApprovalWindow(prompt)
+    }
     if let delay = environment["GH_TOUCHID_TEST_AUTH_DELAY"].flatMap(Double.init) {
         Thread.sleep(forTimeInterval: delay)
     }
