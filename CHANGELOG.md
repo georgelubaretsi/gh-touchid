@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-02
+
 ### Fixed
 
 - After Touch ID, the approval window left the screen only when gh-touchid exited, so it stayed, frozen at
