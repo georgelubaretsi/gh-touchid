@@ -84,7 +84,7 @@ describe("one use outside a session", () => {
       running.kill(signal);
       const result = await running.finished;
       expect(result.status).toBe(128 + number);
-      expect(env.ghEvents().map((event) => event.signal ?? event.kind)).toEqual(["run", signal]);
+      expect(env.ghRunsAndSignals()).toEqual(["run", signal]);
       expectRevoked(env, env.mock.scopedTokens()[0]!, app);
     });
   }

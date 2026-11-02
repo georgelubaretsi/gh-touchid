@@ -30,6 +30,12 @@ describe("forbidden gh commands", () => {
     ["extension", "install", "owner/gh-extension"],
     ["extensions", "list"],
     ["ext", "list"],
+    // gh finds the command past flags before it, as in `gh --hostname github.com auth token`
+    ["--hostname", "github.com", "auth", "token"],
+    ["-R", "acme/widgets", "auth", "token"],
+    ["auth", "--hostname", "github.com", "token"],
+    ["auth", "status", "--hostname", "github.com", "-t"],
+    ["--title", "x", "extension", "list"],
   ];
 
   for (const argv of forbidden) {
@@ -44,7 +50,7 @@ describe("forbidden gh commands", () => {
         expect(result.auth).toEqual([]);
         expect(result.stderr).toContain("token");
       }
-      expect(env.ghEvents()).toEqual([]);
+      expect(env.ghCalls()).toEqual([]);
       expect(env.mock.requests).toEqual([]);
       const refusals = env.accessLog().filter((line) => line.includes(`refused gh ${argv.slice(0, 2).join(" ")}`));
       expect(refusals).toHaveLength(2);
@@ -285,31 +291,103 @@ describe("Touch ID outcomes", () => {
   });
 });
 
-describe("gh help reference", () => {
-  test("is read only when a flag before -R may take it as its value", async () => {
+describe("gh's list of commands", () => {
+  test("is read from the gh that runs, without a token and with throwaway configuration and data folders", async () => {
     await using env = await TestEnv.create();
     env.seedAccount("alice", aliceToken);
-    await env.run(["as", "alice", "gh", "issue", "list", "-R", "acme/widgets"]);
-    expect(env.ghEvents().filter((event) => event.kind === "reference")).toEqual([]);
-
-    // `-l` takes a value in `issue list`, so `-R` here is the label, not the repository
-    const result = await env.run(["as", "alice", "gh", "issue", "list", "-l", "-R", "--repo", "acme/widgets"]);
-    expect(result.status).toBe(0);
+    expect((await env.run(["as", "alice", "gh", "issue", "list", "-R", "acme/widgets"])).status).toBe(0);
     const reference = env.ghEvents().filter((event) => event.kind === "reference");
     expect(reference).toHaveLength(1);
-    expect(reference[0]!.hasGhToken).toBe(false);
+    // gh lists the extensions in the user's data folder among its commands; they are not gh's
+    const home = reference[0]!.home;
+    expect(reference[0]).toMatchObject({ hasGhToken: false, configDir: home, dataHome: home });
+    expect(home).not.toBe(env.home);
+  });
+
+  test("tells which flags take a value: after -l, -R is the label and --repo names the repository", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", aliceToken);
+    const result = await env.run(["as", "alice", "gh", "issue", "list", "-l", "-R", "--repo", "acme/widgets"]);
+    expect(result.status).toBe(0);
     expect(result.auth).toHaveLength(1);
     expect(result.auth[0]).toContain("acme/widgets");
   });
 
-  test("as an account, an ambiguous -R that the reference cannot settle is refused", async () => {
+  test("that cannot be read refuses every gh command before Touch ID", async () => {
     await using env = await TestEnv.create();
     env.seedAccount("alice", aliceToken);
-    const result = await env.run(["as", "alice", "gh", "issue", "list", "-l", "-R", "--repo", "acme/widgets"], {
-      env: { FAKE_GH_REFERENCE_EXIT: "1" },
-    });
-    expect(result.status).toBe(1);
-    expect(result.auth).toEqual([]);
+    env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret", slug: "acme-agent" });
+    for (const args of [["gh", "-R", "acme/widgets", "issue", "list"], ["as", "alice", "gh", "api", "user"]]) {
+      const result = await env.run(["--json", ...args], { env: { FAKE_GH_REFERENCE_EXIT: "1" } });
+      expect(result.status).toBe(1);
+      expect(result.auth).toEqual([]);
+      expect(lastError(result.stderr)?.code).toBe("gh_commands_unreadable");
+    }
     expect(env.ghCalls()).toEqual([]);
+    expect(env.mock.requests).toEqual([]);
+  });
+});
+
+describe("reading a command line as gh does", () => {
+  const unknown = [
+    ["my-extension", "run"], // an extension: gh runs it with the token
+    ["actions"], // a hidden command
+    ["help", "pr"], // Cobra's own, hidden
+    ["pr", "bogus"], // no such subcommand
+    ["--title", "auth", "token"], // gh takes `auth` as the value of --title, leaving `token`
+  ];
+  for (const argv of unknown) {
+    test(`gh ${argv.join(" ")} names no command of gh: refused before Touch ID, with or without an account`, async () => {
+      await using env = await TestEnv.create();
+      env.seedAccount("alice", aliceToken);
+      env.seedApp("acme", { clientId: "Iv23liacme", clientSecret: "secret", slug: "acme-agent" });
+      for (const args of [["gh", ...argv], ["as", "alice", "gh", ...argv]]) {
+        const result = await env.run(["--json", ...args], { env: { GH_REPO: "acme/widgets" } });
+        expect(result.status).toBe(2);
+        expect(result.auth).toEqual([]);
+        expect(lastError(result.stderr)?.code).toBe("unknown_command");
+      }
+      expect(env.ghCalls()).toEqual([]);
+      expect(env.mock.requests).toEqual([]);
+      expect(env.accessLog().filter((line) => line.includes("refused gh"))).toHaveLength(2);
+    });
+  }
+
+  test("an alias runs as given, and the dialog names the command gh runs for it", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", aliceToken);
+    const result = await env.run(["as", "alice", "gh", "co", "12", "-R", "acme/widgets"]);
+    expect(result.status).toBe(0);
+    expect(result.auth[0]).toContain("“gh pr checkout”");
+    expect(env.ghCalls().map((call) => call.argv)).toEqual([["co", "12", "-R", "acme/widgets"]]);
+  });
+
+  test("flags before the command do not change what the dialog names", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", aliceToken);
+    // gh skips `--limit 5` to find `issue list`, which then takes it
+    const result = await env.run(["as", "alice", "gh", "--limit", "5", "issue", "list", "-R", "acme/widgets"]);
+    expect(result.status).toBe(0);
+    expect(result.auth[0]).toContain("“gh issue list”");
+  });
+
+  test("a NUL in an argument or a folder from JSON is refused before anything runs", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("alice", aliceToken);
+    const inputs: [string, Record<string, unknown>][] = [
+      ["gh", { argv: ["auth\u0000x", "token"] }],
+      ["gh", { argv: ["issue", "list", "-R", "acme/widgets"], cwd: `${env.workDir}\u0000/elsewhere` }],
+      ["as", { login: "alice", argv: ["gh", "auth\u0000x", "token"] }],
+      ["as", { login: "alice", argv: ["/bin/echo", "a\u0000b"] }],
+    ];
+    for (const [command, input] of inputs) {
+      const result = await env.run(["--json", "--input", "-", command], { stdin: JSON.stringify(input) });
+      expect(result.status).toBe(2);
+      expect(result.auth).toEqual([]);
+      expect(lastError(result.stderr)?.code).toBe("invalid_input");
+      expect(lastError(result.stderr)?.message).toContain("NUL");
+    }
+    expect(env.ghEvents()).toEqual([]);
+    expect(env.mock.requests).toEqual([]);
   });
 });

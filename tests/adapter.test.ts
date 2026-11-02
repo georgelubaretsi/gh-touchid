@@ -116,7 +116,7 @@ describe("gh-touchid mcp", () => {
 
     mcp.notify("notifications/cancelled", { requestId: id, reason: "test" });
     await waitForExit(core!);
-    expect(env.ghEvents().map((event) => event.signal ?? event.kind)).toEqual(["run", "SIGTERM"]);
+    expect(env.ghRunsAndSignals()).toEqual(["run", "SIGTERM"]);
     const scoped = env.mock.scopedTokens();
     expect(scoped).toHaveLength(1);
     expect(scoped[0]!.revoked).toBe(true);
@@ -215,7 +215,7 @@ describe("gh-touchid rpc", () => {
     expect(reply.error.code).toBe(-32800);
     expect(reply.error.data.code).toBe("cancelled");
     expect(isRunning(core!)).toBe(false);
-    expect(env.ghEvents().map((event) => event.signal ?? event.kind)).toEqual(["run", "SIGTERM"]);
+    expect(env.ghRunsAndSignals()).toEqual(["run", "SIGTERM"]);
     expect(env.mock.scopedTokens()[0]!.revoked).toBe(true);
   });
 
