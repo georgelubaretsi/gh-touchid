@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-02
+
 ### Security
 
 - `gh-touchid gh` and `as <login> gh` let `gh auth token` through when a flag came before it, as in
