@@ -49,15 +49,19 @@
           dontConfigure = true;
 
           # Deliberately no release list (--known-releases): this build is ad hoc signed, so it keeps a background
-          # program of its own instead of sharing the releases' one.
+          # program of its own instead of sharing the releases' one. The command list is that of this build's gh,
+          # whichever version nixpkgs has (`gh help reference`, run by scripts/pinned-gh.sh with an empty HOME and
+          # GH_CONFIG_DIR, GH_PAGER=cat and no tokens), not release/gh-reference.md, which is the pinned gh's.
           buildPhase = ''
             runHook preBuild
             export HOME="$TMPDIR"
+            bash scripts/pinned-gh.sh reference ${gh}/bin/gh > "$TMPDIR/gh-reference.md"
             bash scripts/build.sh \
               --xcode ${lib.escapeShellArg xcode.path} \
               --xcode-version ${lib.escapeShellArg xcode.version} \
               --gh ${gh}/bin/gh \
               --gh-sha256 "$(sha256sum ${gh}/bin/gh | cut -d ' ' -f 1)" \
+              --gh-reference "$TMPDIR/gh-reference.md" \
               --output gh-touchid \
               --adapter-output gh-touchid-adapter
             runHook postBuild

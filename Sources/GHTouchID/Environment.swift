@@ -76,13 +76,7 @@ func openInBrowser(_ url: String) {
 #if GH_TOUCHID_TESTING
     fputs("OPEN: \(url)\n", stderr)
 #else
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    process.arguments = [url]
-    guard (try? process.run()) != nil else {
-        return
-    }
-    process.waitUntilExit()
+    runAndWait(URL(fileURLWithPath: "/usr/bin/open"), [url])
 #endif
 }
 

@@ -23,10 +23,7 @@ func runAdapter(mode: String, arguments: [String]) throws -> Never {
           let core = ownRealExecutablePath else {
         throw ToolError.missingAdapter(adapter)
     }
-    let command = [adapter, mode, "--core", core]
-    var argv: [UnsafeMutablePointer<CChar>?] = command.map { strdup($0) } + [nil]
-    execv(adapter, &argv)
-    argv.forEach { free($0) }
+    _ = try replaceProcess(with: adapter, arguments: [mode, "--core", core], searchPath: false)
     throw ToolError.missingAdapter(adapter)
 }
 

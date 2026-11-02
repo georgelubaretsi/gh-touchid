@@ -407,55 +407,32 @@ private func pushDestination(_ arguments: [String], folder: String?) -> String? 
     return printable(destinations.joined(separator: ", "))
 }
 
-/// `gh pr list`, `gh api repos/o/r/pulls`: gh and its first two words that are not flags (a leading
-/// `-R owner/name` is skipped with its value), at most 60 characters.
-func ghAction(_ arguments: [String]) -> String {
-    let words = ghCommandWords(arguments).map { arguments[$0] }
-    return shortened((["gh"] + words).joined(separator: " "))
-}
-
-/// Where the words of `ghAction` are in `arguments`.
-private func ghCommandWords(_ arguments: [String]) -> [Int] {
-    var words: [Int] = []
-    var index = 0
-    while index < arguments.count, words.count < 2 {
-        let argument = arguments[index]
-        if argument == "-R" || argument == "--repo" {
-            index += 2
-            continue
+/// What `command` asks for: its headline (the command gh runs, `gh pr checkout` for `gh co 12`, with its first
+/// arguments up to two words, as in `gh api repos/o/r/pulls`; at most 60 characters), its command line as gh runs it
+/// (the command, then its arguments, quoted where needed) and, for creating or commenting, its `--title` and `--body`.
+/// All of it is read as gh reads it, so a command line cannot show one thing here and do another in gh.
+func ghUse(_ command: GitHubCommandLine) -> Use {
+    let parsed = parsedArguments(command.rest, flags: command.flags)
+    let arguments = parsed.compactMap { argument -> String? in
+        if case let .positional(value) = argument {
+            return value
         }
-        if argument == "--" {
-            break
-        }
-        if !argument.hasPrefix("-") {
-            words.append(index)
-        } else if !words.isEmpty {
-            break // flags after the command: its own options, not more of its name
-        }
-        index += 1
+        return nil
     }
-    return words
-}
-
-/// What `gh <arguments>` asks for: its command, its command line (the command's words, then the other arguments,
-/// quoted where needed) and, for creating or commenting, its `--title` and `--body`.
-func ghUse(_ arguments: [String]) -> Use {
-    let command = ghAction(arguments)
-    let words = ghCommandWords(arguments)
-    let rest = arguments.indices.filter { !words.contains($0) }.map { shellQuoted(arguments[$0]) }
+    let headline = ["gh"] + (command.path + arguments).prefix(max(2, command.path.count))
+    let line = ["gh"] + command.path + command.rest.map(shellQuoted)
     var use = Use(
-        command: command,
-        commandLine: printable((["gh"] + words.map { arguments[$0] } + rest).joined(separator: " "), limit: .max)
+        command: shortened(headline.joined(separator: " ")),
+        commandLine: printable(line.joined(separator: " "), limit: .max)
     )
-    guard ["gh pr create", "gh issue create", "gh issue comment", "gh pr comment"].contains(command) else {
+    guard [["pr", "create"], ["issue", "create"], ["issue", "comment"], ["pr", "comment"]].contains(command.path) else {
         return use
     }
-    let options = arguments.prefix { $0 != "--" }
     // shown whole: for a post, what gets posted is the point of asking
-    use.title = textOption(options, long: "title", short: "t").map { printable($0, limit: .max) }
-    if let file = textOption(options, long: "body-file", short: "F") {
+    use.title = lastFlagValue(parsed, ["title", "t"]).map { printable($0, limit: .max) }
+    if let file = lastFlagValue(parsed, ["body-file", "F"]) {
         use.body = bodyFile(file)
-    } else if let body = textOption(options, long: "body", short: "b") {
+    } else if let body = lastFlagValue(parsed, ["body", "b"]) {
         use.body = multiline(body)
     }
     return use
@@ -479,28 +456,6 @@ private func multiline(_ text: String) -> String {
     text.split(separator: "\n", omittingEmptySubsequences: false)
         .map { printable(String($0), limit: .max) }
         .joined(separator: "\n")
-}
-
-/// The value of the last `--<long> v`, `--<long>=v`, `-<short> v` or `-<short>v` in `arguments`.
-private func textOption(_ arguments: ArraySlice<String>, long: String, short: Character) -> String? {
-    var value: String?
-    var index = arguments.startIndex
-    while index < arguments.endIndex {
-        let argument = arguments[index]
-        index += 1
-        if argument == "--\(long)" || argument == "-\(short)" {
-            if index < arguments.endIndex {
-                value = arguments[index]
-                index += 1
-            }
-        } else if argument.hasPrefix("--\(long)=") {
-            value = String(argument.dropFirst(long.count + 3))
-        } else if argument.hasPrefix("-\(short)"), !argument.hasPrefix("--") {
-            let inline = argument.dropFirst(2)
-            value = String(inline.hasPrefix("=") ? inline.dropFirst() : inline)
-        }
-    }
-    return value
 }
 
 /// `'two words'`: an argument as a shell would need it typed; others as they are.

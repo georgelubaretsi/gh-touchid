@@ -5,6 +5,11 @@ import AppKit
 // dark, and writes <dir>/<kind>-<light|dark>.png. No Touch ID (the touchid symbol stands in for the control) and no
 // window on screen: the windows are drawn without ever being ordered in.
 
+/// The use of `gh <arguments>`, read as every gh command line is (a test build reads gh's commands from its fake gh).
+private func ghUse(_ arguments: [String]) throws -> Use {
+    ghUse(try readGitHubCommand(arguments))
+}
+
 func renderPrompts(into directory: String) throws -> Int32 {
     let folder = NSHomeDirectory() + "/code/widget"
     let agent = Requester(name: "agent", folder: folder)
@@ -12,7 +17,7 @@ func renderPrompts(into directory: String) throws -> Int32 {
     let widget = "acme/widget"
     let hello = "octo-org/hello-world"
     let push = Use(command: "git push", branch: "fix-login")
-    let prompts: [(String, Prompt)] = [
+    let prompts: [(String, Prompt)] = try [
         ("use-push", .appUse(by: agent, use: push, repository: widget, app: "acme-agent", login: "octocat")),
         ("use-push-no-slug", .appUse(by: agent, use: push, repository: widget, app: nil, login: nil)),
         ("use-push-delete", .appUse(

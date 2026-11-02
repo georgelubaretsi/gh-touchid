@@ -477,7 +477,7 @@ describe("routing gh to the reader", () => {
       running.kill(signal);
       const result = await running.finished;
       expect(result.status).toBe(128 + number);
-      expect(env.ghEvents().map((event) => event.signal ?? event.kind)).toEqual(["run", signal]);
+      expect(env.ghRunsAndSignals()).toEqual(["run", signal]);
       expectAllRevoked(env);
     });
   }

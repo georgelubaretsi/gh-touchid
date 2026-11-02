@@ -57,7 +57,7 @@ export const services = {
 } as const;
 
 const fakeGitHubCLI = join(import.meta.dir, "fake-gh.ts");
-const helpReference = join(import.meta.dir, "help-reference.md");
+const helpReference = join(import.meta.dir, "../../release/gh-reference.md");
 
 export interface RunOptions {
   /** The folder to run in; by default a folder that is not in a Git repository. */
@@ -417,6 +417,13 @@ export class TestEnv {
   /** The commands gh ran with (not `help reference`). */
   ghCalls(): GhCall[] {
     return this.ghEvents().filter((event): event is GhEvent & GhCall => event.kind === "run");
+  }
+
+  /** What gh did, `run` or the signal that ended it, in order; reading gh's list of commands left out. */
+  ghRunsAndSignals(): string[] {
+    return this.ghEvents()
+      .filter((event) => event.kind !== "reference")
+      .map((event) => event.signal ?? event.kind);
   }
 
   /** Waits until the fake gh has recorded `count` commands; for gh left running (FAKE_GH_MODE=sleep). */

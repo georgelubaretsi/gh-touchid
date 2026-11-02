@@ -366,9 +366,10 @@ Codex reviews the pull requests and answers `@codex review`, and `@me` searches 
 | a `gh` command with none of these (`gh search …`, `gh api users/octocat`) | none: the [reader](#5-the-reader-optional) |
 | Git                        | the repository in the URL                                                          |
 
-A flag right before `-R` might take it as its value, as in `gh issue create --body -R`. For such commands only,
-gh-touchid reads which flags take values from the pinned `gh`'s `help reference`. If that cannot settle it,
-`gh-touchid as LOGIN gh …` is refused, since an account's token is not limited to the repository in the dialog.
+gh-touchid reads a `gh` command line the way `gh` does, from `gh`'s own list of its commands, aliases and flags
+(`gh help reference`): which command runs, which flags take values, and so which `-R` names the repository, as in
+`gh issue create --body -R`, where `-R` is the body. The dialog names the command `gh` runs (`gh pr checkout` for
+`gh co 12`), whatever comes before it, as in `gh --limit 5 issue list`.
 
 If the owner has no App stored, or the command names no repository, `gh` uses the [reader](#5-the-reader-optional)
 when one is stored: no Touch ID, public data only. Without a reader it is refused before any Touch ID dialog, with a
@@ -682,8 +683,15 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
   `gh` extensions.
 - Git gets its token through its credential-helper pipe. gh-touchid answers only when the request comes from Git's
   HTTPS transport (`git-remote-https`) and stdout is not a terminal.
-- `gh` commands that would print or store the token, or install aliases or extensions, are refused: `auth` (except
-  `auth status` without `-t`), `--show-token` anywhere, `alias`, and `extension` (also as `extensions` or `ext`).
+- `gh` runs only its own commands, read as `gh` reads them. Anything else is refused before any dialog: extensions,
+  your own aliases, hidden commands such as `gh help` (use `--help`), and a word that names no command where `gh`
+  would look for one (`unknown_command`). Of `gh`'s own commands, those that would print or store the token, or
+  install aliases or extensions, are refused too, wherever flags put their name: `auth` (except `auth status` without
+  `-t`), `--show-token` anywhere, `alias`, and `extension` (also as `extensions` or `ext`), so
+  `gh --hostname github.com auth token` is refused like `gh auth token`.
+- An argument or folder given in JSON (`--input`, `rpc`, `mcp`) that holds a NUL character is refused
+  (`invalid_input`): a program gets its arguments as C strings, which end at the first NUL, so it would get less than
+  gh-touchid checked. Every program gh-touchid starts goes through one function that refuses NUL as well.
 - Your sign-in (the access token, and the refresh token that renews it for six months) and the App's client secret
   stay in the Keychain. Together they reach every repository the App is installed on, with all its permissions, as
   far as your own access goes. gh-touchid uses them only to narrow, renew and revoke tokens. It keeps only sign-ins
@@ -881,6 +889,7 @@ just test            # a test build (scripts/build.sh --testing) and the test su
 just package         # the release tarball in dist/, as the release workflow builds it (scripts/package.sh)
 just check-formula   # the Homebrew formula for dist/'s tarball, checked with a throwaway copy of the newest Homebrew
 just lint            # the workflows with actionlint, the scripts with ShellCheck
+just gh-reference    # gh's command list, release/gh-reference.md, from the pinned gh (scripts/pinned-gh.sh)
 ```
 
 `scripts/build.sh` takes `--xcode` to pick the Xcode (default `/Applications/Xcode.app`) and `--xcode-version` to
@@ -899,9 +908,16 @@ build/gh-touchid app create acme --name acme-dev
 
 ### Release builds
 
-`scripts/package.sh` downloads GitHub's `gh` for macOS from the release pinned in `release/gh.json`, and refuses it
-unless its SHA-256 matches. It builds gh-touchid to run only that `gh`, checked by its SHA-256 and by the cdhashes of
-its two slices (`scripts/build.sh` with `--gh ../libexec/gh-touchid/gh`, `--gh-sha256` and `--gh-cdhash`).
+`scripts/package.sh` downloads GitHub's `gh` for macOS from the release pinned in `release/gh.json`
+(`scripts/pinned-gh.sh`, which keeps it in `build/pinned-gh/`), and refuses it unless its SHA-256 matches. It builds
+gh-touchid to run only that `gh`, checked by its SHA-256 and by the cdhashes of its two slices (`scripts/build.sh` with
+`--gh ../libexec/gh-touchid/gh`, `--gh-sha256` and `--gh-cdhash`).
+
+gh-touchid reads `gh` command lines by `gh`'s own list of its commands and flags, `gh help reference`, and allows only
+the commands on it that it does not ban. A release builds in `release/gh-reference.md` (`--gh-reference`), which
+`just gh-reference` writes from the pinned `gh`; `scripts/package.sh` refuses to package unless it is exactly what that
+`gh` prints, so a `gh` upgrade comes with a reviewed diff of `gh`'s commands. The Nix build from source builds in the
+list of its own `gh`, and a development build reads it from the `gh` it runs.
 
 On a `v*` tag, after the tarball passes its checks, the release workflow signs `bin/gh-touchid` and
 `libexec/gh-touchid/gh-touchid-adapter` with `scripts/sign.sh`, in a job of the GitHub environment `release`, which
@@ -927,12 +943,13 @@ published. The tap runs `brew test-bot` on changes made there.
 `just test` builds the test builds (`scripts/test-builds.sh`): the current sources with their adapter, an older
 version and one that marks it revoked, and v0.4.1 from its tag, which is built once and kept. They keep their state
 in `GH_TOUCHID_TEST_DIR`, talk to a mock GitHub at `GH_TOUCHID_API_URL`, print `AUTH:` and `OPEN:` lines instead of
-showing Touch ID or a browser, and run a fake `gh`. Then `bun test` runs the suite in `tests/` against them; the
-`rpc` and `mcp` tests run the adapter through `GH_TOUCHID_ADAPTER`. One test shows the real approval window for
-about a second, answered by the test build itself rather than Touch ID, and checks with the window server that it
-leaves the screen; it needs a login session, as macOS runners have. The tests need Apple silicon. The check
-workflow runs `just test` and `just lint` on every pull request and push to main. The release workflow runs
-`just test` before packaging.
+showing Touch ID or a browser, and run a fake `gh`, which prints `release/gh-reference.md` as its command list. The
+pinned `gh` is linked at `build/test/pinned-gh`, for the tests that check what the real `gh` does with a command
+line. Then `bun test` runs the suite in `tests/` against them; the `rpc` and `mcp` tests run the adapter through
+`GH_TOUCHID_ADAPTER`. One test shows the real approval window for about a second, answered by the test build itself
+rather than Touch ID, and checks with the window server that it leaves the screen; it needs a login session, as macOS
+runners have. The tests need Apple silicon. The check workflow runs `just test` and `just lint` on every pull request
+and push to main. The release workflow runs `just test` before packaging.
 
 ### Nix from source
 

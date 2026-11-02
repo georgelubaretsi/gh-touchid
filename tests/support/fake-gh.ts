@@ -6,7 +6,7 @@
 // Then it prints $FAKE_GH_STDOUT and exits with $FAKE_GH_EXIT (default 0), or with FAKE_GH_MODE=sleep waits until
 // SIGINT, SIGQUIT, SIGHUP or SIGTERM and exits with 128 + the signal's number.
 
-import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 
 const environment = process.env;
@@ -30,13 +30,17 @@ const common = {
   configDirEntries: configDir !== null && existsSync(configDir) ? readdirSync(configDir) : null,
   ghPager: environment.GH_PAGER ?? null,
   ghRepo: environment.GH_REPO ?? null,
+  home: environment.HOME ?? null,
+  dataHome: environment.XDG_DATA_HOME ?? null,
   cwd: process.cwd(),
 };
 
+// stdout is written synchronously: `process.stdout.write` to a pipe is asynchronous, and `process.exit` would cut the
+// output at the pipe's buffer (64 KiB), less than gh's list of commands
 if (argv[0] === "help" && argv[1] === "reference") {
   record({ kind: "reference", ...common });
   if (environment.FAKE_GH_REFERENCE) {
-    process.stdout.write(readFileSync(environment.FAKE_GH_REFERENCE));
+    writeFileSync(1, readFileSync(environment.FAKE_GH_REFERENCE));
   }
   process.exit(Number(environment.FAKE_GH_REFERENCE_EXIT ?? 0));
 }
@@ -53,7 +57,7 @@ if (environment.FAKE_GH_MODE === "sleep") {
 }
 record({ kind: "run", ...common });
 if (environment.FAKE_GH_STDOUT) {
-  process.stdout.write(environment.FAKE_GH_STDOUT);
+  writeFileSync(1, environment.FAKE_GH_STDOUT);
 }
 if (environment.FAKE_GH_MODE !== "sleep") {
   process.exit(Number(environment.FAKE_GH_EXIT ?? 0));

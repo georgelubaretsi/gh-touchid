@@ -29,6 +29,7 @@ parts the change touches:
 | `Secrets.swift` | checks before a dialog read attributes only; development builds keep their own items; nothing secret is written outside the Keychain (test builds excepted) |
 | `Repository.swift`, `GitHubFlags.swift` | the repository in the dialog is the one the token is for; for an account's token, ambiguity is refused, not guessed |
 | Anything that prints, logs or builds an error | no token, client secret or refresh token can end up in it |
+| `release/gh.json` (a gh upgrade) | `just gh-reference` rewrote `release/gh-reference.md` from the new gh, and its diff of gh's commands and flags is reviewed: a new command is allowed once it appears there unless gh-touchid bans it, so any that could reveal the token is banned in the same change; `just package` refuses a list that is not the pinned gh's |
 | `scripts/`, `release/`, `.github/workflows/` | the bundled gh stays pinned by SHA-256 and cdhash; actions are pinned by commit; workflows keep the least permissions they need |
 
 A change to any of these needs a test in `tests/` for the behaviour it keeps or changes; `just test` runs them
