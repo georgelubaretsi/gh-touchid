@@ -18,6 +18,10 @@ enum ToolError: Error, CustomStringConvertible {
     case noApp(owner: String, logins: [String], program: String)
     case invalidToken
     case forbiddenCommand
+    /// The command line as far as gh-touchid read it, ending with the word that names no command of gh.
+    case unknownGitHubCommand(String)
+    /// Where gh's list of commands was to come from.
+    case gitHubCommandsUnreadable(String)
     case missingGitHubCLI(String)
     case changedGitHubCLI(String)
     case unverifiedGitHubCLI(String)
@@ -93,6 +97,12 @@ enum ToolError: Error, CustomStringConvertible {
             return "the token must contain only printable ASCII and no whitespace"
         case .forbiddenCommand:
             return "this gh command could reveal or replace the token"
+        case let .unknownGitHubCommand(command):
+            return "\(command) is not one of gh's own commands; gh-touchid runs only those, not extensions, aliases "
+                + "or hidden commands (`gh-touchid gh --help` lists them)"
+        case let .gitHubCommandsUnreadable(source):
+            return "cannot read gh's list of commands from \(source), which gh-touchid needs to tell what a gh "
+                + "command does; check that this gh runs"
         case let .missingGitHubCLI(path):
             return "GitHub CLI is not executable at \(path)"
         case let .changedGitHubCLI(path):
@@ -171,6 +181,8 @@ enum ToolError: Error, CustomStringConvertible {
         case .notSignedIn: return "not_signed_in"
         case .noApp: return "no_app"
         case .forbiddenCommand: return "forbidden_command"
+        case .unknownGitHubCommand: return "unknown_command"
+        case .gitHubCommandsUnreadable: return "gh_commands_unreadable"
         case .missingGitHubCLI: return "gh_missing"
         case .changedGitHubCLI: return "gh_changed"
         case .unverifiedGitHubCLI: return "gh_unverified"
@@ -198,7 +210,8 @@ enum ToolError: Error, CustomStringConvertible {
     /// 2 when the input was wrong, so that running the same thing again cannot help; 1 otherwise.
     var exitStatus: Int32 {
         switch self {
-        case .usage, .commandUsage, .input, .invalidToken, .invalidPrivateKey, .confirmationNeeded, .inputNeeded:
+        case .usage, .commandUsage, .input, .invalidToken, .invalidPrivateKey, .confirmationNeeded, .inputNeeded,
+             .unknownGitHubCommand:
             return 2
         default:
             return 1

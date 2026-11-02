@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `gh-touchid gh` and `as <login> gh` let `gh auth token` through when a flag came before it, as in
+  `gh --hostname github.com auth token`, which printed the token: the check read only the first word, and gh finds its
+  command past flags. gh-touchid now reads every gh command line the way gh does, from gh's own list of commands,
+  aliases and flags, and the check, the approval dialog, the reader's issue check and the choice of repository all use
+  that one reading.
+- A NUL character inside an argument given in JSON (`--input`, `rpc`, `mcp`) passed the check whole but reached gh cut
+  at the NUL, so `auth<NUL>x token` ran `gh auth token`. Such input is now refused (`invalid_input`), and every program
+  gh-touchid starts goes through one function that refuses NUL too.
+
+### Changed
+
+- `gh` runs only gh's own commands: extensions, your own gh aliases, hidden commands such as `gh help` and words that
+  name no command are refused before any dialog, with the new error code `unknown_command`. If gh's list of commands
+  cannot be read (development builds only), every gh command is refused with `gh_commands_unreadable`.
+- The approval dialog names the command gh runs, aliases resolved (`gh pr checkout` for `gh co 12`).
+
 ## [0.5.1] - 2026-11-02
 
 ### Fixed

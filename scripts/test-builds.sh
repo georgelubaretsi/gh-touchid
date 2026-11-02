@@ -13,6 +13,8 @@
 #                                   test build, built again only when the tag moves
 #   build/test/legacy/gh-touchid    gh-touchid 0.4.1 (git archive v0.4.1, which needs the tag) as a test build, built
 #                                   again only when the tag moves
+#   build/test/pinned-gh            a link to GitHub's gh as release/gh.json pins it (scripts/pinned-gh.sh path): the
+#                                   tests use it as the judge of what gh does with a command line
 #
 # The lists pin both architectures of older/ and previous/, and only arm64 of legacy/: 0.4.1's build.sh left its
 # x86_64 slice unsigned, so the tests of 0.4.1 need Apple silicon.
@@ -42,6 +44,8 @@ legacy_commit="$(git -C "$root" rev-parse --verify --quiet "$legacy_tag^{commit}
 previous_commit="$(git -C "$root" rev-parse --verify --quiet "$previous_tag^{commit}")" ||
   fail "needs the tag $previous_tag in this clone"
 mkdir -p "$out"
+pinned_gh="$("$root/scripts/pinned-gh.sh" path)"
+ln -sfn "$pinned_gh" "$out/pinned-gh"
 
 build() {
   "$root/scripts/build.sh" --testing ${xcode[@]+"${xcode[@]}"} "$@"

@@ -8,7 +8,15 @@ import Foundation
 
 indirect enum Schema {
     case object(properties: [(name: String, schema: Schema)], required: [String], description: String = "")
-    case string(enumValues: [String]? = nil, pattern: String? = nil, secret: Bool = false, description: String = "")
+    /// `argument`: text a program gets as an argument or a path, so no NUL, which would end it early in C: the program
+    /// would get less than gh-touchid checked.
+    case string(
+        enumValues: [String]? = nil,
+        pattern: String? = nil,
+        secret: Bool = false,
+        argument: Bool = false,
+        description: String = ""
+    )
     case integer(minimum: Int? = nil, maximum: Int? = nil, description: String = "")
     case boolean(description: String = "")
     case array(Schema, description: String = "")
@@ -30,13 +38,15 @@ indirect enum Schema {
                 rendered["required"] = required
             }
             text = description
-        case let .string(enumValues, pattern, secret, description):
+        case let .string(enumValues, pattern, secret, argument, description):
             rendered = ["type": "string"]
             if let enumValues {
                 rendered["enum"] = enumValues
             }
             if let pattern {
                 rendered["pattern"] = pattern
+            } else if argument {
+                rendered["pattern"] = "^[^\\u0000]*$"
             }
             if secret {
                 rendered["writeOnly"] = true
@@ -78,7 +88,7 @@ indirect enum Schema {
         switch self {
         case let .object(properties, _, _):
             return properties.contains { $0.schema.hasSecret }
-        case let .string(_, _, secret, _):
+        case let .string(_, _, secret, _, _):
             return secret
         case .integer, .boolean:
             return false
@@ -91,7 +101,7 @@ indirect enum Schema {
 
     /// Whether this is a secret string.
     var isSecret: Bool {
-        if case let .string(_, _, secret, _) = self {
+        if case let .string(_, _, secret, _, _) = self {
             return secret
         }
         return false
@@ -122,9 +132,12 @@ indirect enum Schema {
                 }
             }
             return nil
-        case let .string(enumValues, pattern, _, _):
+        case let .string(enumValues, pattern, _, argument, _):
             guard !isNumber(value), let text = value as? String else {
                 return "\(name): must be a string"
+            }
+            if argument, text.utf8.contains(0) {
+                return "\(name): contains a NUL character, which a program cannot receive: remove it"
             }
             if let enumValues, !enumValues.contains(text) {
                 return "\(name): must be one of \(enumValues.joined(separator: ", "))"

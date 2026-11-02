@@ -41,14 +41,14 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 
 | Entry point | Who supplies it | Handling |
 | --- | --- | --- |
-| Command-line arguments and environment (`GH_REPO`, `GH_TOUCHID_AS`) | any program running as the user | They choose the repository and command shown in the dialog; titles and bodies are shown in full; flags that could reveal a token (`auth token`, `--show-token`, `alias`, `extension`) are refused |
+| Command-line arguments and environment (`GH_REPO`, `GH_TOUCHID_AS`) | any program running as the user | They choose the repository and command shown in the dialog. A gh command line is read as gh reads it, from gh's own list of commands and flags, so the dialog names the command gh runs; only gh's own commands run (no extensions, user aliases or hidden commands); those that could reveal or store the token (`auth` other than `auth status` without `-t`, `--show-token`, `alias`, `extension`) are refused wherever flags put their name; titles and bodies are shown in full |
 | Git's credential requests (`git credential get`) | Git | Answered only when the nearest non-shell ancestor is `git-remote-http(s)` and stdout is not a terminal |
 | The background agent's Unix socket | processes of the same user | Every request and reply carries the protocol and the version. The agent answers protocols 1 (earlier releases) and 2, each as it means (in 2, `register` also looks past `gh-touchid-adapter`), and refuses any other before anything is done; a client falls back once to protocol 1 for a trusted earlier release's agent. `register` (always the caller's own session root), `check`, `status` and `lock` for any same-user peer; `begin-approval`, `approve`, `deny` and `elevate` only for a trusted peer (boundary 3). Clients act only on replies of a trusted agent |
 | The local server on `127.0.0.1:47911` (`app create`, `app add`, `app login`, `reader create`) | the browser, and any web page or local process | Only `GET`; a callback must carry this attempt's random `state`; the code exchange needs the PKCE verifier and the client secret (a manifest conversion needs the one-time code); the manifest page stops being served once an App was made |
-| `--input` JSON and command words | any program running as the user, directly or through the adapter | Checked against the operation's schema before anything is done: unknown keys, wrong types and input over 1 MiB are refused; secrets come only on stdin, never as arguments |
+| `--input` JSON and command words | any program running as the user, directly or through the adapter | Checked against the operation's schema before anything is done: unknown keys, wrong types and input over 1 MiB are refused; secrets come only on stdin, never as arguments; text that becomes a program's argument or folder is refused with a NUL, at which a C string would end, and every program start refuses it again |
 | The adapter's stdio (`gh-touchid rpc`, `gh-touchid mcp`) | the client that started it (an agent harness) | The adapter holds no secrets and calls the core's CLI once per call; it refuses operations that take a secret, so a secret never passes through a model's parameters |
 | GitHub's replies | GitHub | Parsed defensively; replies that hold tokens never go into errors; a sign-in without an expiry or a refresh token is refused |
-| `gh help reference` of the pinned gh | the pinned gh | Parsed only to tell which flags take values, for ambiguous `-R` |
+| gh's list of commands (`gh help reference`) | the pinned gh: built into a release (`release/gh-reference.md`, checked against the packaged gh); in a development build, the gh that runs | Every decision about a gh command line comes from it: the command, which flags take values, the repository. A development build reads it with throwaway configuration and data folders, so installed extensions are not taken for gh's commands |
 | The process table (names, parents, folders) | the kernel | Used for dialog wording, the session root and the access log; a same-user process can choose its own name |
 
 ## Trust boundaries
@@ -118,7 +118,8 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 - **gh's children see the token** while gh runs; a hook in a repository the agent can write can read it. The token is
   limited to one repository and revoked when gh exits; Git's tokens live up to 8 hours.
 - **Dialog wording comes from the process table**, which a same-user process can influence (its name, its folder).
-  The dialog names the repository, command and scope from gh-touchid's own parsing, which a program cannot change.
+  The dialog names the repository, command and scope as gh will read the command line, so a program cannot make it
+  name one command while gh runs another.
 - **Your sign-in and client secret are broad.** They sit in the Keychain, available while the Mac is unlocked.
 - **Account tokens are as broad and long-lived as the user made them**, and are never revoked by gh-touchid.
 - **The fixed port 47911**: a process already listening there makes a sign-in fail; it cannot receive the code,

@@ -57,10 +57,7 @@ func runAs(login: String, command: [String], capture: OutputCapture?) throws -> 
         )
     }
     fflush(stdout)
-    var argv: [UnsafeMutablePointer<CChar>?] = command.map { strdup($0) } + [nil]
-    execvp(program, &argv)
-    let reason = String(cString: strerror(errno))
-    argv.forEach { free($0) }
+    let reason = try replaceProcess(with: program, arguments: Array(command.dropFirst()), searchPath: true)
     throw ToolError.input("cannot run \(program): \(reason)")
 }
 

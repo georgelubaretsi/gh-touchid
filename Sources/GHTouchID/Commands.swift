@@ -131,7 +131,10 @@ private let repositoriesSchema = Schema.array(
     .string(pattern: "^[^/\\s]+/[^/\\s]+$", description: "owner/name"),
     description: "Repositories; without them, those of the working folder."
 )
-private let folderSchema = Schema.string(description: "The folder to run in; by default the current one.")
+private let folderSchema = Schema.string(
+    argument: true,
+    description: "The folder to run in; by default the current one."
+)
 private let streamsOutput: [(String, Schema)] = [
     ("exit_code", .integer(description: "The command's exit status (128 plus the signal that ended it).")),
     ("stdout", .string(description: "Its standard output, when at most 1 MiB.")),
@@ -368,7 +371,7 @@ let commandOperations: [Operation] = [
         example: "gh-touchid gh -R acme/widgets pr list",
         positional: [],
         input: objectSchema([
-            ("argv", .array(.string(), description: "GitHub CLI's arguments.")),
+            ("argv", .array(.string(argument: true), description: "GitHub CLI's arguments.")),
             ("cwd", folderSchema),
             ("stdin", .string(description: "GitHub CLI's standard input (with --json); by default none.")),
         ], required: ["argv"]),
@@ -451,7 +454,7 @@ let commandOperations: [Operation] = [
         positional: [],
         input: objectSchema([
             ("login", ownerSchema),
-            ("argv", .array(.string(), description: "The command and its arguments.")),
+            ("argv", .array(.string(argument: true), description: "The command and its arguments.")),
             ("cwd", folderSchema),
             ("stdin", .string(description: "The command's standard input (with --json); by default none.")),
         ], required: ["login", "argv"]),
@@ -688,22 +691,24 @@ private func removeApp(owner: String, yes: Bool, context: OperationContext) thro
 /// gh with a token narrowed from your sign-in to the owner's App, with the reader's, or with the token of `account`;
 /// with `capture`, gh's streams are its files. gh's exit status.
 func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? = nil) throws -> Int32 {
-    guard !isForbiddenGitHubCommand(arguments) else {
-        let command = commandSummary(["gh"] + arguments.prefix(2))
-        appendAccessLog("refused \(command) to \(processChain(getpid())): \(ToolError.forbiddenCommand)")
-        throw ToolError.forbiddenCommand
+    let command: GitHubCommandLine
+    do {
+        command = try allowedGitHubCommand(arguments)
+    } catch let refusal as ToolError where refusal.code == "forbidden_command" || refusal.code == "unknown_command" {
+        let summary = commandSummary(["gh"] + arguments.prefix(2))
+        appendAccessLog("refused \(summary) to \(processChain(getpid())): \(refusal)")
+        throw refusal
     }
     let repository: String?
     do {
-        // an account's token is not limited to the repository named in the dialog: no guessing which one gh acts on
-        repository = try requestedRepository(arguments, exact: account != nil)
+        repository = try requestedRepository(command)
     } catch ToolError.missingRepository {
         repository = nil // an account or the reader needs no repository, as in `gh api user` outside one
     }
     let cli = try gitHubCLI()
     let authorization = try authorizeUse(
         repository: repository,
-        use: ghUse(arguments),
+        use: ghUse(command),
         account: account,
         forGit: false,
         arguments: arguments

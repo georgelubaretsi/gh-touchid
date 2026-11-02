@@ -5,8 +5,8 @@
 # the flake's source build both call this script; it is the only place the compiler flags live.
 #
 #   scripts/build.sh --output FILE [--adapter-output FILE | --no-adapter] [--xcode PATH] [--xcode-version VERSION]
-#                    [--gh PATH --gh-sha256 SHA256 [--gh-cdhash ARCH=CDHASH]...] [--known-releases FILE]
-#                    [--testing [--testing-version VERSION]]
+#                    [--gh PATH --gh-sha256 SHA256 --gh-reference FILE [--gh-cdhash ARCH=CDHASH]...]
+#                    [--known-releases FILE] [--testing [--testing-version VERSION]]
 #
 #   --output           where to write the executable
 #   --adapter-output   where to write gh-touchid-adapter (default: gh-touchid-adapter in the folder of --output, where
@@ -19,6 +19,9 @@
 #   --gh-sha256        the SHA-256 of that gh; gh-touchid refuses to run a gh whose SHA-256 differs
 #   --gh-cdhash        the cdhash of one architecture of that gh (codesign -d -vvv --arch ARCH); with these, gh
 #                      starts suspended and runs only if the code the kernel loaded has one of them
+#   --gh-reference     with --gh, and required by it: `gh help reference` of that gh, such as release/gh-reference.md
+#                      (scripts/pinned-gh.sh reference GH), gh's own list of its commands and flags, by which
+#                      gh-touchid reads gh's command lines and allows only the commands on it
 #   --known-releases   the earlier releases this build knows by their cdhashes, such as release/known-releases: one
 #                      per line, `VERSION STATUS arm64=CDHASH x86_64=CDHASH`, STATUS trusted or revoked; lines
 #                      starting with # and empty lines are ignored, any other line is refused
@@ -27,9 +30,10 @@
 #   --testing-version  with --testing only: the version the test build states instead of toolVersion, e.g. 0.4.0,
 #                      for tests of one version meeting another
 #
-# Without --gh the result is a development build, which runs GH_TOUCHID_GH or the gh on PATH, and GH_TOUCHID_ADAPTER
-# or the gh-touchid-adapter beside it. Without --known-releases the build knows no earlier release. SwiftPM keeps its
-# checkouts and builds in .build/ of the checkout, and fetches the pinned packages from GitHub the first time.
+# Without --gh the result is a development build, which runs GH_TOUCHID_GH or the gh on PATH, reads the command list
+# from that gh's `gh help reference`, and runs GH_TOUCHID_ADAPTER or the gh-touchid-adapter beside it. Without
+# --known-releases the build knows no earlier release. SwiftPM keeps its checkouts and builds in .build/ of the
+# checkout, and fetches the pinned packages from GitHub the first time.
 set -euo pipefail
 
 # The oldest Xcode, and the oldest macOS gh-touchid runs on.
@@ -48,13 +52,14 @@ xcode_version=
 gh=
 gh_sha256=
 gh_cdhashes=
+gh_reference=
 known_releases=
 testing=
 testing_version=
 while [ $# -gt 0 ]; do
   case "$1" in
-    --output | --adapter-output | --xcode | --xcode-version | --gh | --gh-sha256 | --gh-cdhash | --known-releases | \
-      --testing-version)
+    --output | --adapter-output | --xcode | --xcode-version | --gh | --gh-sha256 | --gh-cdhash | --gh-reference | \
+      --known-releases | --testing-version)
       [ $# -ge 2 ] || fail "$1 needs a value"
       case "$1" in
         --output) output=$2 ;;
@@ -64,6 +69,7 @@ while [ $# -gt 0 ]; do
         --gh) gh=$2 ;;
         --gh-sha256) gh_sha256=$2 ;;
         --gh-cdhash) gh_cdhashes="${gh_cdhashes:+$gh_cdhashes,}$2" ;;
+        --gh-reference) gh_reference=$2 ;;
         --known-releases) known_releases=$2 ;;
         --testing-version) testing_version=$2 ;;
       esac
@@ -92,6 +98,17 @@ if [ -n "$gh" ] || [ -n "$gh_sha256" ] || [ -n "$gh_cdhashes" ]; then
   [[ "$gh_sha256" =~ $sha256_pattern ]] || fail "--gh-sha256 takes a SHA-256 in lowercase hex (got: $gh_sha256)"
   [ -z "$gh_cdhashes" ] || [[ "$gh_cdhashes" =~ $cdhashes_pattern ]] ||
     fail "--gh-cdhash takes arm64=CDHASH or x86_64=CDHASH, 40 lowercase hex digits (got: $gh_cdhashes)"
+  # A pinned build reads gh's command lines by the list of the gh it pins, never by what that gh prints at run time.
+  [ -n "$gh_reference" ] ||
+    fail "--gh needs --gh-reference, the command list of that gh: scripts/pinned-gh.sh reference GH > FILE"
+  [ -f "$gh_reference" ] ||
+    fail "--gh-reference: no such file: $gh_reference; write it with scripts/pinned-gh.sh reference GH > FILE"
+  [ -s "$gh_reference" ] ||
+    fail "--gh-reference: $gh_reference is empty; write it with scripts/pinned-gh.sh reference GH > FILE"
+  # Base64, whose characters are none of sed's or Swift's special ones in configure() below.
+  gh_reference_base64="$(base64 < "$gh_reference" | tr -d '\n')"
+elif [ -n "$gh_reference" ]; then
+  fail "--gh-reference needs --gh: a development build reads the command list from the gh it runs"
 fi
 
 version_pattern='^[0-9]+(\.[0-9]+)*$'
@@ -145,8 +162,8 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/gh-touchid-build.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
-# The sources, with the placeholders of a copy of BuildConfiguration.swift replaced: the gh to run, its SHA-256 and its
-# cdhashes; the earlier releases; a test build's version. Each replacement applies on its own.
+# The sources, with the placeholders of a copy of BuildConfiguration.swift replaced: the gh to run, its SHA-256, its
+# cdhashes and its command list; the earlier releases; a test build's version. Each replacement applies on its own.
 mkdir "$work/sources"
 cp "$root"/Sources/GHTouchID/*.swift "$work/sources/"
 configuration="$work/sources/BuildConfiguration.swift"
@@ -164,6 +181,8 @@ if [ -n "$gh" ]; then
     "pin gh's SHA-256"
   configure 'let pinnedGitHubCLICDHashes = "@gh-cdhashes@"' "let pinnedGitHubCLICDHashes = \"$gh_cdhashes\"" \
     "pin gh's cdhashes"
+  configure 'let pinnedGitHubReference = "@gh-reference@"' "let pinnedGitHubReference = \"$gh_reference_base64\"" \
+    "build in gh's command list"
 fi
 [ -z "$known_releases" ] ||
   configure 'let knownReleaseList = "@known-releases@"' "let knownReleaseList = \"$releases\"" \

@@ -92,29 +92,6 @@ private func pinnedGitHubCLIPath() throws -> URL {
     return URL(fileURLWithPath: NSString.path(withComponents: components))
 }
 
-/// Commands that would print the token, store it elsewhere, or run code gh-touchid does not know about.
-func isForbiddenGitHubCommand(_ arguments: [String]) -> Bool {
-    if arguments.contains(where: { $0 == "--show-token" || $0.hasPrefix("--show-token=") }) {
-        return true
-    }
-    guard let command = arguments.first else {
-        return false
-    }
-    if ["alias", "extension", "extensions", "ext"].contains(command) {
-        return true
-    }
-    guard command == "auth" else {
-        return false
-    }
-    guard arguments.count >= 2, arguments[1] == "status" else {
-        return true
-    }
-    // `-t` is `auth status --show-token`, also inside a group of short flags such as `-at`
-    return arguments.dropFirst(2).contains { argument in
-        argument.hasPrefix("-") && !argument.hasPrefix("--") && argument.dropFirst().contains("t")
-    }
-}
-
 /// While it exists, SIGINT, SIGQUIT, SIGHUP and SIGTERM no longer end gh-touchid, so that it can revoke the token it
 /// minted: one that arrives before gh starts is remembered (and gh is not started), one that arrives while gh runs is
 /// passed on to it. Signals reach this object through dispatch sources, outside any signal handler. SIGPIPE is
@@ -248,72 +225,6 @@ func runGitHubCLI(
     let status = waitForExit(pid)
     relay.detach()
     return status
-}
-
-/// Starts `executable` with `arguments` (argv[0] is its path) and `environment`, sharing only stdin, stdout and stderr
-/// (or `streams`, descriptors put in their place), with every signal at its default action and none blocked; stopped
-/// before its first instruction when `suspended`, until it gets SIGCONT. With `searchPath`, a name without a slash is
-/// looked up on PATH.
-private func spawn(
-    _ executable: String,
-    _ arguments: [String],
-    environment: [String: String],
-    suspended: Bool,
-    streams: [Int32]? = nil,
-    searchPath: Bool = false
-) throws -> pid_t {
-    var attributes: posix_spawnattr_t?
-    posix_spawnattr_init(&attributes)
-    defer { posix_spawnattr_destroy(&attributes) }
-    var flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
-    if suspended {
-        flags |= POSIX_SPAWN_START_SUSPENDED
-    }
-    posix_spawnattr_setflags(&attributes, Int16(flags))
-    var defaults = sigset_t()
-    sigfillset(&defaults)
-    posix_spawnattr_setsigdefault(&attributes, &defaults)
-    var mask = sigset_t()
-    sigemptyset(&mask)
-    posix_spawnattr_setsigmask(&attributes, &mask)
-
-    var actions: posix_spawn_file_actions_t?
-    posix_spawn_file_actions_init(&actions)
-    defer { posix_spawn_file_actions_destroy(&actions) }
-    for descriptor in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
-        if let streams {
-            posix_spawn_file_actions_adddup2(&actions, streams[Int(descriptor)], descriptor)
-        } else {
-            posix_spawn_file_actions_addinherit_np(&actions, descriptor)
-        }
-    }
-    var argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
-    defer { argv.forEach { free($0) } }
-    var envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-    defer { envp.forEach { free($0) } }
-    var pid: pid_t = 0
-    let started = searchPath
-        ? posix_spawnp(&pid, executable, &actions, &attributes, &argv, &envp)
-        : posix_spawn(&pid, executable, &actions, &attributes, &argv, &envp)
-    guard started == 0 else {
-        guard !searchPath else {
-            throw ToolError.input("cannot run \(executable): \(String(cString: strerror(started)))")
-        }
-        throw ToolError.missingGitHubCLI(executable)
-    }
-    return pid
-}
-
-/// Waits for the child `pid` and returns its exit status, or 128 plus the signal that ended it.
-private func waitForExit(_ pid: pid_t) -> Int32 {
-    var status: Int32 = 0
-    while waitpid(pid, &status, 0) < 0 {
-        guard errno == EINTR else {
-            return 1
-        }
-    }
-    let signal = status & 0x7F
-    return signal == 0 ? (status >> 8) & 0xFF : 128 + signal
 }
 
 /// The cdhash of the code the kernel loaded for the process `pid` (the slice that runs), as long as its signature is

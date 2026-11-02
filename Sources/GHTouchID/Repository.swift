@@ -21,23 +21,10 @@ func gitOutput(_ arguments: [String]) -> String? {
     return trimmed.isEmpty ? nil : trimmed
 }
 
-/// Runs `git <arguments>` and returns its exit status and standard output, or nil when Git cannot start. Git's
-/// standard error is dropped unless `showErrors`.
+/// Runs `git <arguments>` and returns its exit status and standard output, or nil when Git cannot start or an argument
+/// contains a NUL. Git's standard error is dropped unless `showErrors`.
 func runGit(_ arguments: [String], showErrors: Bool = false) -> (status: Int32, output: Data)? {
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["git"] + arguments
-    process.standardOutput = output
-    process.standardError = showErrors ? FileHandle.standardError : FileHandle.nullDevice
-    do {
-        try process.run()
-    } catch {
-        return nil
-    }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    return (process.terminationStatus, data)
+    runReadingOutput(URL(fileURLWithPath: "/usr/bin/env"), ["git"] + arguments, showErrors: showErrors)
 }
 
 /// `owner/name` from a github.com URL (`https://github.com/o/r.git`, `git@github.com:o/r`), or nil. Test builds also
@@ -110,27 +97,13 @@ func repositoriesOption(_ options: [String: [String]]) throws -> [String] {
     return repositories
 }
 
-/// The repository a `gh` command is for: `-R`/`--repo`, else for `gh api` the repository its endpoint names, else
-/// GH_REPO, else the current repository. gh's flag definitions are read only when a flag before the selector may take
-/// it as its value; when they cannot be read, only `-R`/`--repo` is known to take a value (a wrong guess only yields a
-/// token gh cannot use). With `exact`, for a token not limited to one repository (an account's), it refuses instead of
-/// guessing.
-func requestedRepository(_ arguments: [String], exact: Bool) throws -> String {
-    var flags = CommandFlags()
-    if repositorySelectorIsAmbiguous(arguments) {
-        if let known = gitHubCommandFlags(arguments) {
-            flags = known
-        } else if exact {
-            throw ToolError.refused(
-                "cannot tell which repository this command acts on: gh help reference does not settle "
-                    + "whether a flag takes the -R/--repo after it"
-            )
-        }
-    }
-    if let selector = try repositorySelector(arguments, flags: flags) {
+/// The repository a gh command is for: `-R`/`--repo`, else for `gh api` the repository its endpoint names, else
+/// GH_REPO, else the current repository. Its flags are read as gh reads them, with the command's own definitions.
+func requestedRepository(_ command: GitHubCommandLine) throws -> String {
+    if let selector = try repositorySelector(command.rest, flags: command.flags) {
         return try repositorySpecification(selector)
     }
-    if let repository = apiEndpointRepository(arguments) {
+    if command.path == ["api"], let repository = apiEndpointRepository(APICall(command)) {
         return repository
     }
     if let repository = ProcessInfo.processInfo.environment["GH_REPO"], !repository.isEmpty {
@@ -158,50 +131,11 @@ private func repositorySpecification(_ raw: String) throws -> String {
     throw ToolError.input("\(raw) is not a github.com repository (OWNER/REPO, HOST/OWNER/REPO or a github.com URL)")
 }
 
-/// `gh api`'s flags that take a value (gh 2.x: `-X`, `-H`, `-F`, `-f`, `--input`, `-q`, `-t`, `--hostname`, `--cache`,
-/// `-p`); the others are switches. Read here for the endpoint and by IssueCheck.swift for the method and fields.
-let apiValueFlags: (long: Set<String>, short: Set<Character>) = (
-    ["method", "header", "field", "raw-field", "input", "jq", "template", "hostname", "cache", "preview"],
-    ["X", "H", "F", "f", "q", "t", "p"]
-)
-
 /// For `gh api <endpoint>`: `OWNER/REPO` when the endpoint is `repos/OWNER/REPO[/…]`, with or without a leading slash
 /// or as a full URL of the API, and names them without `{owner}`/`{repo}` placeholders; nil otherwise, as for
 /// `graphql` or `user`, which gh resolves (or needs no repository for) on its own.
-func apiEndpointRepository(_ arguments: [String]) -> String? {
-    guard arguments.first == "api" else {
-        return nil
-    }
-    var endpoint: String?
-    var index = 1
-    while index < arguments.count {
-        let argument = arguments[index]
-        if argument == "--" {
-            endpoint = index + 1 < arguments.count ? arguments[index + 1] : nil
-            break
-        }
-        if argument.hasPrefix("--") {
-            let name = String(argument.dropFirst(2).prefix { $0 != "=" })
-            index += !argument.contains("=") && apiValueFlags.long.contains(name) ? 2 : 1
-        } else if argument.count > 1, argument.hasPrefix("-") {
-            // a group such as `-iH`: its first flag that takes a value takes the rest of the group, or else the next
-            // argument
-            var group = argument.dropFirst()
-            var takesNext = false
-            while let shorthand = group.first {
-                group = group.dropFirst()
-                if apiValueFlags.short.contains(shorthand) {
-                    takesNext = group.isEmpty
-                    break
-                }
-            }
-            index += takesNext ? 2 : 1
-        } else {
-            endpoint = argument
-            break
-        }
-    }
-    guard var path = endpoint, !path.contains("{") else {
+private func apiEndpointRepository(_ call: APICall) -> String? {
+    guard var path = call.endpoint, !path.contains("{") else {
         return nil
     }
     if path.contains("://") {

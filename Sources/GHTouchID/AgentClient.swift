@@ -131,20 +131,6 @@ private func spawnAgent() throws -> pid_t {
     guard let executable = ownExecutablePath else {
         throw ToolError.agent("cannot find gh-touchid's own executable")
     }
-    var attributes: posix_spawnattr_t?
-    posix_spawnattr_init(&attributes)
-    defer { posix_spawnattr_destroy(&attributes) }
-    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
-
-    var actions: posix_spawn_file_actions_t?
-    posix_spawn_file_actions_init(&actions)
-    defer { posix_spawn_file_actions_destroy(&actions) }
-    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
-    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
-
-    var argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable), strdup("agent"), nil]
-    defer { argv.forEach { free($0) } }
 #if GH_TOUCHID_TESTING
     var inherited = ["GH_TOUCHID_TEST_DIR=\(testDirectory)"]
     if let requirement = ProcessInfo.processInfo.environment["GH_TOUCHID_TEST_PEER_REQUIREMENT"] {
@@ -153,14 +139,7 @@ private func spawnAgent() throws -> pid_t {
 #else
     let inherited: [String] = []
 #endif
-    var environment: [UnsafeMutablePointer<CChar>?] = inherited.map { strdup($0) } + [nil]
-    defer { environment.forEach { free($0) } }
-    var pid: pid_t = 0
-    let status = posix_spawn(&pid, executable, &actions, &attributes, &argv, &environment)
-    guard status == 0 else {
-        throw ToolError.agent("cannot start the agent: \(String(cString: strerror(status)))")
-    }
-    return pid
+    return try spawnAgentProcess(executable, ["agent"], environment: inherited)
 }
 
 /// A revoked release holds agent.sock: lock it, so that nothing goes on its word any more. Nothing it held is carried

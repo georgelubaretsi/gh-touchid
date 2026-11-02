@@ -7,55 +7,26 @@ import Foundation
 // (from a file, stdin or `--input`). gh fills placeholders (`{owner}`, `{repo}`, `{branch}`, `:owner`, `:repo`) from
 // GH_REPO and the repository here, in a `gh api` endpoint and in `-F` values, which could spell out an issues route or
 // `createIssue` after this check: so a request that posts to an endpoint with one, or a typed query with one, is
-// refused too. Commands are found as Cobra, gh's parser, finds them. Other writes GitHub refuses the reader on its own;
-// the ones not tested are left to the notice every reader use prints.
+// refused too. Commands and flags are read as gh reads them (`readGitHubCommand`, `parsedArguments`). Other writes
+// GitHub refuses the reader on its own; the ones not tested are left to the notice every reader use prints.
 
 /// Whether `gh <arguments>` would open an issue, or might and cannot be told: then the reader is not used for it.
 func opensIssue(_ arguments: [String]) -> Bool {
-    guard let command = cobraSubcommand(arguments, switches: ["help", "h", "version"]) else {
-        return false
+    guard let command = try? readGitHubCommand(arguments) else {
+        return true
     }
-    switch command.word {
-    case "issue":
-        let subcommand = cobraSubcommand(command.rest, switches: ["help", "h"])?.word
-        return subcommand == "create" || subcommand == "new"
-    case "api":
-        return apiOpensIssue(command.rest)
+    switch command.path {
+    case ["issue", "create"]:
+        return true
+    case ["api"]:
+        return apiOpensIssue(APICall(command))
     default:
         return false
     }
 }
 
-/// The word Cobra takes as the subcommand among `arguments`, and the arguments without it (the flags before it
-/// included, which the subcommand parses too). As Cobra's `stripFlags` and `argsMinusFirstX` read them: a `--flag` or
-/// `-f` without `=` takes the next argument unless it is one of the command's `switches`; `--` ends the search; any
-/// other argument starting with `-` takes nothing; a `--flag` or `-f` with nothing after its value leaves no
-/// subcommand.
-private func cobraSubcommand(_ arguments: [String], switches: Set<String>) -> (word: String, rest: [String])? {
-    var index = 0
-    while index < arguments.count {
-        let argument = arguments[index]
-        if argument == "--" {
-            return nil
-        }
-        let long = argument.hasPrefix("--") && !argument.contains("=")
-        let short = !long && argument.hasPrefix("-") && !argument.contains("=") && argument.count == 2
-        if long || short {
-            let name = String(argument.dropFirst(long ? 2 : 1))
-            index += switches.contains(name) ? 1 : 2
-        } else if !argument.isEmpty, !argument.hasPrefix("-") {
-            var rest = arguments
-            rest.remove(at: index)
-            return (argument, rest)
-        } else {
-            index += 1
-        }
-    }
-    return nil
-}
-
 /// What `gh api` reads from its arguments: its endpoint, its method, its fields and whether it reads `--input`.
-private struct APICall {
+struct APICall {
     var endpoint: String?
     var method: String?
     /// `name=value` of `-f`/`--raw-field` and `-F`/`--field`, in order.
@@ -64,55 +35,24 @@ private struct APICall {
     var typedFields: [String] = []
     var input = false
 
-    /// Reads the arguments of `api`.
-    init(_ arguments: [String]) {
-        var index = 0
-        while index < arguments.count {
-            let argument = arguments[index]
-            index += 1
-            if argument == "--" {
-                if endpoint == nil, index < arguments.count {
-                    endpoint = arguments[index]
+    /// Reads the arguments of `gh api`, its first argument that is not a flag being the endpoint.
+    init(_ command: GitHubCommandLine) {
+        for argument in parsedArguments(command.rest, flags: command.flags) {
+            switch argument {
+            case let .positional(value):
+                if endpoint == nil {
+                    endpoint = value
                 }
+            case let .flag(name, value?):
+                take(name, value)
+            case .flag:
                 break
-            }
-            if argument.hasPrefix("--") {
-                let body = argument.dropFirst(2)
-                if let equals = body.firstIndex(of: "=") {
-                    take(String(body[..<equals]), String(body[body.index(after: equals)...]))
-                } else if apiValueFlags.long.contains(String(body)) {
-                    take(String(body), index < arguments.count ? arguments[index] : nil)
-                    index += 1
-                }
-            } else if argument.count > 1, argument.hasPrefix("-") {
-                // a group such as `-iXPOST`: its first flag that takes a value takes the rest of the group, or else
-                // the next argument
-                var group = argument.dropFirst()
-                while let shorthand = group.first {
-                    group = group.dropFirst()
-                    guard apiValueFlags.short.contains(shorthand) else {
-                        continue
-                    }
-                    if group.isEmpty {
-                        take(String(shorthand), index < arguments.count ? arguments[index] : nil)
-                        index += 1
-                    } else {
-                        // pflag reads `-X=POST` as `-X POST`
-                        take(String(shorthand), String(group.first == "=" ? group.dropFirst() : group))
-                    }
-                    break
-                }
-            } else if endpoint == nil {
-                endpoint = argument
             }
         }
     }
 
     /// Keeps what a flag with a value says about the request.
-    private mutating func take(_ flag: String, _ value: String?) {
-        guard let value else {
-            return
-        }
+    private mutating func take(_ flag: String, _ value: String) {
         switch flag {
         case "X", "method":
             method = value.uppercased()
@@ -140,8 +80,7 @@ private let placeholders = ["{owner}", "{repo}", "{branch}", ":owner", ":repo"]
 /// `gh api` posting to a repository's issues (`repos/<owner>/<repo>/issues`, or `repositories/<id>/issues`, GitHub's
 /// same route by the repository's id) or to an endpoint with a placeholder, or `gh api graphql` with a query that
 /// mentions `createIssue`, cannot be read, or is typed (`-F`) with a placeholder.
-private func apiOpensIssue(_ arguments: [String]) -> Bool {
-    let call = APICall(arguments)
+private func apiOpensIssue(_ call: APICall) -> Bool {
     guard let endpoint = call.endpoint else {
         return false
     }

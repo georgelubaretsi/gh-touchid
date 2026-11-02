@@ -8,6 +8,13 @@ let pinnedGitHubCLI = "@gh@"
 let pinnedGitHubCLISHA256 = "@gh-sha256@"
 let pinnedGitHubCLICDHashes = "@gh-cdhashes@"
 
+// Release and Nix builds replace this placeholder (scripts/build.sh --gh-reference) with the base64 of the pinned gh's
+// `gh help reference`, its own list of its commands and flags: release/gh-reference.md for a release, which
+// scripts/package.sh checks against the gh it ships, and the list of the Nix build's gh for that build. gh-touchid
+// reads gh's command lines by this list and allows only commands on it. A value still starting with `@`, as in
+// development builds, means no gh is pinned: gh-touchid then reads the list from the gh it runs.
+let pinnedGitHubReference = "@gh-reference@"
+
 // A release replaces this placeholder (scripts/build.sh --known-releases release/known-releases) with the earlier
 // releases it knows by the cdhash of each architecture of their signed executable: entries separated by `;`, each
 // `VERSION STATUS arm64=CDHASH,x86_64=CDHASH`, STATUS being `trusted` or `revoked` and CDHASH 40 lowercase hex digits.
