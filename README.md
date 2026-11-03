@@ -362,9 +362,16 @@ Codex reviews the pull requests and answers `@codex review`, and `@me` searches 
 | -------------------------- | ---------------------------------------------------------------------------------- |
 | `gh … -R/--repo X`         | `X`: `OWNER/REPO`, `github.com/OWNER/REPO` or a URL                                |
 | `gh api repos/OWNER/REPO/…` | the one the endpoint names (not with `{owner}`/`{repo}` placeholders)             |
+| `gh repo archive\|clone\|delete\|edit\|fork\|sync\|unarchive\|view X` | `X`: `OWNER/REPO`, `github.com/OWNER/REPO` or a URL |
 | any other `gh` command     | `GH_REPO` if set, else the current repository's `origin`                           |
 | a `gh` command with none of these (`gh search …`, `gh api users/octocat`) | none: the [reader](#5-the-reader-optional) |
 | Git                        | the repository in the URL                                                          |
+
+A repository named only inside a GraphQL query (`gh api graphql`), in an endpoint outside `repos/OWNER/REPO`, or as a
+`gh repo` argument without its owner is not read, so such a command gets a token for `GH_REPO` or the current folder's
+repository. When gh then fails, gh-touchid says so, for example `gh-touchid: gh failed with a token for acme/widget
+only, the current folder's repository: …; for another, set GH_REPO=OWNER/REPO`. To query another repository, run the
+command in its folder or with `GH_REPO=OWNER/REPO`.
 
 gh-touchid reads a `gh` command line the way `gh` does, from `gh`'s own list of its commands, aliases and flags
 (`gh help reference`): which command runs, which flags take values, and so which `-R` names the repository, as in
@@ -615,8 +622,9 @@ gh-touchid --help --json                         # every command as an MCP tool,
   stable.
 - What gh-touchid tells its caller besides the result goes to stderr as `gh-touchid: …` lines without `--json`, and
   with it into the result's `notices`, a list present only when there is any: the reader's notice, a token that could
-  not be revoked, how to approve a session, a session's warnings, a problem with the background program. If the
-  command fails instead, they go to stderr before the error line.
+  not be revoked, how to approve a session, a session's warnings, a problem with the background program, and which
+  repository a failed `gh` had its token for when the command line did not name it. If the command fails instead, they
+  go to stderr before the error line.
 - Input is checked against the command's schema before anything is done, and every result against its output schema
   (a mismatch is an `output_invalid` error, a bug to report). Secrets (a client secret, a token, the reader's key)
   come only on stdin, never as flags or from an input file.
