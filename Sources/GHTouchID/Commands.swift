@@ -362,7 +362,9 @@ let commandOperations: [Operation] = [
         words: ["gh"],
         title: "Run GitHub CLI with a narrowed token",
         description: "`gh` runs GitHub CLI with a token for one repository: the one named with -R/--repo, for "
-            + "`gh api` the one its endpoint names, else GH_REPO, else the current repository's origin. The token "
+            + "`gh api` the one its endpoint names, for `gh repo view OWNER/REPO` and the like their argument, else "
+            + "GH_REPO, else the current repository's origin; a GraphQL query is not read, so if gh fails with a "
+            + "token taken that way, a notice names its repository and what to set instead. The token "
             + "acts as you through the owner's App and lacks the workflows permission unless the repository is "
             + "elevated; outside a session, each use asks for Touch ID. With no repository, or for an owner "
             + "without an App, it uses the public reader when one is stored (no Touch ID, public data only), and "
@@ -699,15 +701,15 @@ func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? 
         appendAccessLog("refused \(summary) to \(processChain(getpid())): \(refusal)")
         throw refusal
     }
-    let repository: String?
+    let requested: RequestedRepository?
     do {
-        repository = try requestedRepository(command)
+        requested = try requestedRepository(command)
     } catch ToolError.missingRepository {
-        repository = nil // an account or the reader needs no repository, as in `gh api user` outside one
+        requested = nil // an account or the reader needs no repository, as in `gh api user` outside one
     }
     let cli = try gitHubCLI()
     let authorization = try authorizeUse(
-        repository: repository,
+        repository: requested?.name,
         use: ghUse(command),
         account: account,
         forGit: false,
@@ -722,7 +724,17 @@ func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? 
         Notices.tell("stopped by signal \(number) before gh started")
         return 128 + number
     }
-    return try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay, capture: capture)
+    let status = try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay, capture: capture)
+    // a token for one repository, and maybe not the one gh acted on; not after a signal (128 + its number)
+    if let hint = requested?.hint, (1..<128).contains(status) {
+        switch authorization.grant {
+        case .app, .issues:
+            Notices.tell(hint)
+        case .account, .reader:
+            break
+        }
+    }
+    return status
 }
 
 /// Whether this `git credential get` came from Git itself, in Git's key=value form, checked before its request was

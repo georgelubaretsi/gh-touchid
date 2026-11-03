@@ -2,7 +2,8 @@ import Foundation
 
 // What gh-touchid tells whoever called it besides an operation's result: that the reader is in use and must not
 // create or change anything, a token it could not revoke, how to approve a session, why a session may not help, a
-// problem with the background agent. Without `--json` each goes to stderr as it happens, as `gh-touchid: <notice>`.
+// problem with the background agent, which repository a failed gh had its token for when its command line named none
+// that gh-touchid reads. Without `--json` each goes to stderr as it happens, as `gh-touchid: <notice>`.
 // With `--json` they are kept and returned in the result's `notices`, since a caller that reads JSON (an agent, through
 // `rpc` and `mcp` too, whose adapter passes on only the result) does not read stderr's other lines; when the operation
 // fails instead, they go to stderr ahead of the error line. Messages that only repeat the result stay text-mode lines.
@@ -54,7 +55,8 @@ enum Notices {
 let noticesSchema = Schema.array(
     .string(),
     description: "What gh-touchid tells the caller besides the result, in order: that the reader is in use and must "
-        + "not create or change anything, a token it could not revoke, a warning. Present only when there is any."
+        + "not create or change anything, a token it could not revoke, which repository a failed gh had its token "
+        + "for, a warning. Present only when there is any."
 )
 
 extension Operation {

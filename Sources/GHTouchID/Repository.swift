@@ -97,19 +97,67 @@ func repositoriesOption(_ options: [String: [String]]) throws -> [String] {
     return repositories
 }
 
-/// The repository a gh command is for: `-R`/`--repo`, else for `gh api` the repository its endpoint names, else
-/// GH_REPO, else the current repository. Its flags are read as gh reads them, with the command's own definitions.
-func requestedRepository(_ command: GitHubCommandLine) throws -> String {
+/// The repository a gh command's token is for.
+struct RequestedRepository {
+    let name: String
+    /// What to tell the caller when gh fails: set when `name` came from GH_REPO or the current folder although gh may
+    /// act on a repository the command line names where gh-touchid does not read it.
+    let hint: String?
+}
+
+/// The `gh repo` commands whose first argument is the repository they act on, `OWNER/REPO`, `HOST/OWNER/REPO` or a
+/// URL; they take no `-R`, and gh ignores GH_REPO for them. Not `set-default`: its argument picks one of the current
+/// folder's remotes, which it looks up through the API.
+private let repositoryArgumentCommands: Set<[String]> = [
+    ["repo", "archive"], ["repo", "clone"], ["repo", "delete"], ["repo", "edit"], ["repo", "fork"], ["repo", "sync"],
+    ["repo", "unarchive"], ["repo", "view"],
+]
+
+/// The repository a gh command is for: `-R`/`--repo`; else for `gh api` the repository its endpoint names, and for
+/// `gh repo view` and the like their repository argument; else GH_REPO; else the current repository. Its flags are read
+/// as gh reads them, with the command's own definitions.
+func requestedRepository(_ command: GitHubCommandLine) throws -> RequestedRepository {
     if let selector = try repositorySelector(command.rest, flags: command.flags) {
-        return try repositorySpecification(selector)
+        return RequestedRepository(name: try repositorySpecification(selector), hint: nil)
     }
-    if command.path == ["api"], let repository = apiEndpointRepository(APICall(command)) {
-        return repository
+    // why gh may act on another repository than the one taken below, said if gh fails
+    var unread: String?
+    if command.path == ["api"] {
+        let call = APICall(command)
+        if let repository = apiEndpointRepository(call) {
+            return RequestedRepository(name: repository, hint: nil)
+        }
+        // gh fills placeholders from GH_REPO and the current folder too
+        if let endpoint = call.endpoint, !apiPlaceholders.contains(where: endpoint.lowercased().contains) {
+            unread = "gh-touchid reads no repository from a GraphQL query or an endpoint outside repos/OWNER/REPO; "
+                + "for another, set GH_REPO=OWNER/REPO"
+        }
+    } else if repositoryArgumentCommands.contains(command.path), let argument = firstPositional(command) {
+        // gh completes a name without `/` (`clone`: nor `:`) with your login, which gh-touchid cannot know beforehand
+        if argument.contains("/") || argument.contains(":") {
+            return RequestedRepository(name: try repositorySpecification(argument), hint: nil)
+        }
+        unread = "the repository given to \(command.name) has no owner; write it as OWNER/REPO"
     }
+    let name: String
+    let source: String
     if let repository = ProcessInfo.processInfo.environment["GH_REPO"], !repository.isEmpty {
-        return try repositorySpecification(repository)
+        name = try repositorySpecification(repository)
+        source = "from GH_REPO"
+    } else {
+        name = try repositoryIdentifier()
+        source = "the current folder's repository"
     }
-    return try repositoryIdentifier()
+    let hint = unread.map { "gh failed with a token for \(name) only, \(source): \($0)" }
+    return RequestedRepository(name: name, hint: hint)
+}
+
+/// The first argument of a gh command that is not a flag or a flag's value, after `--` too, as gh passes it on.
+private func firstPositional(_ command: GitHubCommandLine) -> String? {
+    for case let .positional(value) in parsedArguments(command.rest, flags: command.flags) {
+        return value
+    }
+    return nil
 }
 
 /// gh's repository syntax: `OWNER/REPO`, `HOST/OWNER/REPO` or a URL; the host must be github.com.

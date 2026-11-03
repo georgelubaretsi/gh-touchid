@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `gh repo archive|clone|delete|edit|fork|sync|unarchive|view OWNER/REPO` got a token for `GH_REPO` or the current
+  folder's repository instead of the one it names, so it failed with "Resource not accessible by integration" for
+  another private repository. The argument (`OWNER/REPO`, `github.com/OWNER/REPO` or a URL) now chooses the token's
+  repository, as `-R` does; a name without its owner is used as before. `gh repo set-default` is unchanged.
+
+### Added
+
+- When gh fails with a token gh-touchid took from `GH_REPO` or the current folder because the command line names its
+  repository where gh-touchid does not read it (a `gh api graphql` query, an endpoint outside `repos/OWNER/REPO`, a
+  `gh repo` argument without its owner), it says so: `gh-touchid: gh failed with a token for OWNER/REPO only, …`
+  with what to change, and with `--json` in `notices`.
+
+### Changed
+
+- `gh repo view OWNER/REPO` and the like for an owner without your App use the reader, or are refused when none is
+  stored, inside a repository folder too, as `-R OWNER/REPO` already did; before, they got a token for the folder's
+  repository after Touch ID.
+
 ## [0.6.1] - 2026-11-03
 
 ### Fixed

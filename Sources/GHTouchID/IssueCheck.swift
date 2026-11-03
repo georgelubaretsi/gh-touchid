@@ -75,7 +75,7 @@ struct APICall {
 }
 
 /// The placeholders gh fills from the repository: in `gh api`'s endpoint, and in the values of `-F`.
-private let placeholders = ["{owner}", "{repo}", "{branch}", ":owner", ":repo"]
+let apiPlaceholders = ["{owner}", "{repo}", "{branch}", ":owner", ":repo"]
 
 /// `gh api` posting to a repository's issues (`repos/<owner>/<repo>/issues`, or `repositories/<id>/issues`, GitHub's
 /// same route by the repository's id) or to an endpoint with a placeholder, or `gh api graphql` with a query that
@@ -85,7 +85,7 @@ private func apiOpensIssue(_ call: APICall) -> Bool {
         return false
     }
     let posts = call.effectiveMethod == "POST"
-    if posts, placeholders.contains(where: endpoint.lowercased().contains) {
+    if posts, apiPlaceholders.contains(where: endpoint.lowercased().contains) {
         return true
     }
     let path = endpointPath(endpoint)
@@ -96,7 +96,7 @@ private func apiOpensIssue(_ call: APICall) -> Bool {
         let typed = Set(queries(in: call.typedFields))
         return queries(in: call.fields).contains { query in
             query.hasPrefix("@") || query.contains("createIssue")
-                || (typed.contains(query) && placeholders.contains(where: query.contains))
+                || (typed.contains(query) && apiPlaceholders.contains(where: query.contains))
         }
     }
     let rest = path.starts(with: ["api", "v3"]) ? Array(path.dropFirst(2)) : path

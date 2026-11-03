@@ -302,6 +302,130 @@ describe("gh api names its repository", () => {
   });
 });
 
+describe("gh repo commands name theirs", () => {
+  test("OWNER/REPO, HOST/OWNER/REPO or a URL as the argument wins over GH_REPO and the current repository", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const folder = env.makeRepository("acme/other");
+    const uses = [
+      ["repo", "view", "acme/widgets"],
+      ["repo", "view", "-b", "main", "github.com/acme/widgets"],
+      ["repo", "clone", "https://github.com/acme/widgets.git", "folder"],
+      ["repo", "clone", "-u", "up", "git@github.com:acme/widgets.git"],
+      ["repo", "clone", "--", "acme/widgets", "--depth", "1"],
+      ["repo", "fork", "acme/widgets", "--", "--depth", "1"],
+      // `-h` is `--homepage` here, and takes the next argument
+      ["repo", "edit", "-h", "https://example.com", "acme/widgets"],
+      ["repo", "sync", "-s", "acme/gadgets", "acme/widgets"],
+      ["repo", "archive", "-y", "acme/widgets"],
+      ["repo", "unarchive", "acme/widgets", "--yes"],
+      ["repo", "delete", "--yes", "acme/widgets"],
+    ];
+    for (const args of uses) {
+      const result = await env.run(["gh", ...args], { cwd: folder, env: { GH_REPO: "acme/gadgets" } });
+      expect(result.status).toBe(0);
+      expect(result.auth[0]).toContain("acme/widgets");
+    }
+    expect(env.mock.scopedTokens().map((token) => token.repositories)).toEqual(uses.map(() => ["acme/widgets"]));
+  });
+
+  test("a name without its owner, no argument, and set-default's argument: GH_REPO, else the current repository", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const folder = env.makeRepository("acme/other");
+    const uses: [string[], Record<string, string>, string][] = [
+      [["repo", "view", "widgets"], {}, "acme/other"],
+      [["repo", "clone", "widgets"], { GH_REPO: "acme/gadgets" }, "acme/gadgets"],
+      [["repo", "view"], {}, "acme/other"],
+      [["repo", "set-default", "acme/widgets"], {}, "acme/other"],
+    ];
+    for (const [args, extra] of uses) {
+      expect((await env.run(["gh", ...args], { cwd: folder, env: extra })).status).toBe(0);
+    }
+    expect(env.mock.scopedTokens().map((token) => token.repositories![0])).toEqual(uses.map((use) => use[2]));
+  });
+
+  test("an argument on another host is refused before any dialog", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const result = await env.run(["--json", "gh", "repo", "view", "gitlab.com/acme/widgets"]);
+    expect(result.status).toBe(2);
+    expect(result.auth).toEqual([]);
+    expect(JSON.parse(result.stderr.trimEnd().split("\n").at(-1)!).error.code).toBe("invalid_input");
+    expect(env.mock.scopedTokens()).toEqual([]);
+    expect(env.ghCalls()).toEqual([]);
+  });
+});
+
+describe("gh failing with a token for a repository its command line did not name", () => {
+  const graphql = ["api", "graphql", "-f", 'query=query{repository(owner:"acme",name:"widgets"){id}}'];
+  const apiHint =
+    "gh-touchid reads no repository from a GraphQL query or an endpoint outside repos/OWNER/REPO; " +
+    "for another, set GH_REPO=OWNER/REPO";
+  const noOwner = (command: string) => `the repository given to gh repo ${command} has no owner; write it as OWNER/REPO`;
+  const folderToken = "gh failed with a token for acme/other only, the current folder's repository";
+  const repoToken = "gh failed with a token for acme/gadgets only, from GH_REPO";
+
+  test("names the token's repository and what to change: on stderr, and with --json in `notices`", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const folder = env.makeRepository("acme/other");
+    const uses: [string[], Record<string, string>, string][] = [
+      [graphql, {}, `${folderToken}: ${apiHint}`],
+      [graphql, { GH_REPO: "acme/gadgets" }, `${repoToken}: ${apiHint}`],
+      [["api", "orgs/acme/repos"], {}, `${folderToken}: ${apiHint}`],
+      [["repo", "view", "widgets"], {}, `${folderToken}: ${noOwner("view")}`],
+      [["repo", "clone", "widgets"], { GH_REPO: "acme/gadgets" }, `${repoToken}: ${noOwner("clone")}`],
+    ];
+    for (const [args, extra, hint] of uses) {
+      const failing = { ...extra, FAKE_GH_EXIT: "1" };
+      const text = await env.run(["gh", ...args], { cwd: folder, env: failing });
+      expect(text.status).toBe(1);
+      expect(text.stderr).toContain(`gh-touchid: ${hint}\n`);
+
+      const json = await env.run(["--json", "gh", ...args], { cwd: folder, env: failing });
+      expect(json.status).toBe(0);
+      const result = JSON.parse(json.stdout);
+      expect(result.exit_code).toBe(1);
+      expect(result.notices).toContain(hint);
+      expect(json.stderr).not.toContain("gh failed with a token");
+    }
+  });
+
+  test("says nothing when gh succeeds or is interrupted, or when gh acts where the token points", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const folder = env.makeRepository("acme/other");
+    const uses: [string[], string][] = [
+      [graphql, "0"],
+      [graphql, "130"],
+      [["api", "repos/acme/widgets/pulls"], "1"],
+      [["api", "repos/{owner}/{repo}/pulls"], "1"],
+      [["pr", "list"], "1"],
+      [["repo", "view", "acme/widgets"], "1"],
+      [["repo", "view"], "1"],
+    ];
+    for (const [args, exit] of uses) {
+      const result = await env.run(["gh", ...args], { cwd: folder, env: { FAKE_GH_EXIT: exit } });
+      expect(result.status).toBe(Number(exit));
+      expect(result.stderr).not.toContain("gh failed with a token");
+    }
+  });
+
+  test("says nothing for a token not narrowed to that repository: an account's, the reader's", async () => {
+    await using env = await TestEnv.create();
+    env.seedAccount("bob", "ghp_bob00000000000000000000000000000000");
+    seedReader(env);
+    const folder = env.makeRepository("someone/project");
+    for (const args of [["as", "bob", "gh", ...graphql], ["gh", ...graphql]]) {
+      const result = await env.run(args, { cwd: folder, env: { FAKE_GH_EXIT: "1" } });
+      expect(result.status).toBe(1);
+      expect(env.ghCalls().at(-1)!.argv).toEqual(graphql);
+      expect(result.stderr).not.toContain("gh failed with a token");
+    }
+  });
+});
+
 describe("renewing the sign-in", () => {
   test("with less than an hour left, it is renewed once and the token is narrowed from the new one", async () => {
     await using env = await TestEnv.create();
