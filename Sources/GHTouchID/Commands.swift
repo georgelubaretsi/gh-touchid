@@ -658,7 +658,7 @@ private func removeApp(owner: String, yes: Bool, context: OperationContext) thro
             appendAccessLog("ended the grant of \(signIn.login) to the \(owner) App")
         } catch {
             appendAccessLog("could not end the grant of \(signIn.login) to the \(owner) App: \(error)")
-            fputs("gh-touchid: could not end your sign-in's grant on GitHub: \(error)\n", stderr)
+            Notices.tell("could not end your sign-in's grant on GitHub: \(error)")
         }
     }
     let git: Bool
@@ -719,7 +719,7 @@ func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? 
     let credential = try issueCredential(authorization)
     defer { revokeAfterUse(credential, repository: authorization.target) }
     if let number = relay.received {
-        fputs("gh-touchid: stopped by signal \(number) before gh started\n", stderr)
+        Notices.tell("stopped by signal \(number) before gh started")
         return 128 + number
     }
     return try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay, capture: capture)
@@ -855,7 +855,7 @@ private func registerSession(repositories named: [String]?) throws -> [String: A
     )
     // The session only helps the programs whose Git and gh come here; say so now rather than at their first use.
     for warning in sessionWarnings(repositories: session.repositories) {
-        fputs("Warning: \(warning)\n", stderr)
+        Notices.tell("warning: \(warning)")
     }
     return [
         "program": session.label,

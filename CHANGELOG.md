@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- With `--json`, and so through `rpc` and `mcp`, what gh-touchid tells its caller besides the result went to stderr
+  outside the JSON, where agents never saw it: above all the reader's "don't create or change anything with it", and
+  a token it could not revoke. It is now in the result's `notices`, a list present only when there is any; the
+  output schema of every command declares it. If the command fails instead, the notices go to stderr before the error
+  line.
+
+### Changed
+
+- These messages now start with `gh-touchid: ` on stderr: the session hint (`gh-touchid: to approve this whole session
+  once, run: gh-touchid session`) and `session`'s warnings (`gh-touchid: warning: …`, before `Warning: …`).
+
 ## [0.6.0] - 2026-11-02
 
 ### Security

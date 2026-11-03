@@ -266,7 +266,12 @@ describe("--json output", () => {
     const extra = { FAKE_GH_STDOUT: "issues\n", FAKE_GH_EXIT: "3" };
     const json = await env.run(["--json", "gh", "-R", "acme/widgets", "issue", "list"], { env: extra });
     expect(json.status).toBe(0);
-    expect(JSON.parse(json.stdout)).toEqual({ exit_code: 3, stdout: "issues\n", stderr: "" });
+    expect(JSON.parse(json.stdout)).toEqual({
+      exit_code: 3,
+      stdout: "issues\n",
+      stderr: "",
+      notices: ["to approve this whole session once, run: gh-touchid session"],
+    });
     const text = await env.run(["gh", "-R", "acme/widgets", "issue", "list"], { env: extra });
     expect(text.status).toBe(3);
     expect(text.stdout).toBe("issues\n");

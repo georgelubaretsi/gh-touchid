@@ -186,7 +186,7 @@ func authorizeUse(
             }
             return authorized(covers ? .app(session: session) : .issues(session: session))
         }
-        fputs("To approve this whole session once, run: gh-touchid session\n", stderr)
+        Notices.tell("to approve this whole session once, run: gh-touchid session")
         try authenticate(.appUse(
             by: requester(),
             use: use,
@@ -234,7 +234,7 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
             return try issueOnlyCredential(repository: repository, session: session, authorization: authorization)
         case .reader:
             let (token, label) = try mintStoredReaderToken()
-            fputs("\(readerNotice(slug: label.slug))\n", stderr)
+            Notices.tell(readerNotice(slug: label.slug))
             appendAccessLog("granted \(authorization.target) (reader \(label.slug)) to \(chain)")
             return GitHubCredential(
                 token: token.token,
@@ -355,7 +355,7 @@ func revokeAfterUse(_ credential: GitHubCredential, repository: String) {
             try revokeInstallationToken(credential.token)
         }
     } catch {
-        fputs("gh-touchid: could not revoke the token for \(repository); it expires at \(localTime(expires)): \(error)\n", stderr)
+        Notices.tell("could not revoke the token for \(repository); it expires at \(localTime(expires)): \(error)")
         appendAccessLog("could not revoke the token for \(repository): \(error)")
     }
 }

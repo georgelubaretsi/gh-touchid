@@ -200,7 +200,7 @@ describe("session warnings", () => {
   }
 
   function warnings(stderr: string): string[] {
-    return stderr.split("\n").filter((line) => line.startsWith("Warning: "));
+    return stderr.split("\n").filter((line) => line.startsWith("gh-touchid: warning: "));
   }
 
   test("none when Git asks this gh-touchid only and gh on PATH is its wrapper", async () => {
@@ -219,9 +219,14 @@ describe("session warnings", () => {
     const result = await run(["session", "--repo", "acme/widgets", "--repo", "acme/gadgets"]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("pending");
-    expect(warnings(result.stderr)).toEqual([
-      "Warning: Git for acme asks: this gh-touchid, osxkeychain; fix: gh-touchid git setup acme",
-    ]);
+    const warning = "warning: Git for acme asks: this gh-touchid, osxkeychain; fix: gh-touchid git setup acme";
+    expect(warnings(result.stderr)).toEqual([`gh-touchid: ${warning}`]);
+
+    // an agent registering its session with --json (or through rpc and mcp) gets the warning in the result
+    const json = await run(["--json", "session", "--repo", "acme/widgets"]);
+    expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout).notices).toEqual([warning]);
+    expect(warnings(json.stderr)).toEqual([]);
   });
 
   test("another gh first on PATH: which one and the fix", async () => {
@@ -231,7 +236,7 @@ describe("session warnings", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("pending");
     expect(warnings(result.stderr)).toEqual([
-      `Warning: gh on PATH: ${join(env.dir, "fake", "gh")}, another gh; `
+      `gh-touchid: warning: gh on PATH: ${join(env.dir, "fake", "gh")}, another gh; `
         + `fix: add \`export PATH="${wrapperFolder}:$PATH"\` to your shell's profile, `
         + "or `alias gh='gh-touchid gh'` for your own shell only",
     ]);
