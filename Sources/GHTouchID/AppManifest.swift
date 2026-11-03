@@ -121,7 +121,7 @@ func createApp(owner: String, name: String, openBrowser: Bool) throws -> Created
         )
     } catch {
         // the App exists on GitHub: keep it, so that `app login` can finish what is left
-        fputs("You are not signed in to the new App \(app.slug): \(error)\n", stderr)
+        Notices.tell("you are not signed in to the new App \(app.slug): \(error)")
         try authenticate(.newApp(app.slug, owner: owner))
         // a sign-in to a previous App would not work with this one
         try withSignInLock(owner: owner) {

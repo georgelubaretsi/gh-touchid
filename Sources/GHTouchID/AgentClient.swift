@@ -14,7 +14,7 @@ private func reportAgentProblem(_ problem: String) {
         return
     }
     agentProblem = problem
-    fputs("gh-touchid: \(problem)\n", stderr)
+    Notices.tell(problem)
 }
 
 /// Leaves alone the program holding the agent's socket that is not a gh-touchid this one trusts: says so on stderr
@@ -162,10 +162,9 @@ private func takeOverRevokedAgent(version: String, holder: String) {
         }
         usleep(100_000)
     }
-    fputs(
-        "gh-touchid: the background program of gh-touchid \(version) was revoked and has been stopped, ending its "
-            + "sessions; run `gh-touchid session` again in each program to approve it once.\n",
-        stderr
+    Notices.tell(
+        "the background program of gh-touchid \(version) was revoked and has been stopped, ending its sessions; run "
+            + "`gh-touchid session` again in each program to approve it once."
     )
 }
 

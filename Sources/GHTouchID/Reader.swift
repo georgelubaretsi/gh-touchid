@@ -17,9 +17,9 @@ struct ReaderToken {
     let expires: Date
 }
 
-/// What every use of the reader prints to stderr before gh starts.
+/// What every use of the reader tells its caller (Notices) before gh starts.
 func readerNotice(slug: String) -> String {
-    "gh-touchid: public read-only access as \(slug)[bot]; don't create or change anything with it"
+    "public read-only access as \(slug)[bot]; don't create or change anything with it"
 }
 
 /// GitHub's page for installing the reader on its owner.

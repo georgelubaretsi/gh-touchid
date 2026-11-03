@@ -14,9 +14,14 @@ export { keyFingerprint, newPrivateKey } from "./mock-github";
 export const readerService = "com.lubaretsi.gh-touchid.reader";
 export const readerAccount = "reader";
 
-/** The notice every reader use prints to stderr. */
+/** What every reader use tells its caller: in the result's `notices` with --json. */
+export function readerNoticeText(slug: string): string {
+  return `public read-only access as ${slug}[bot]; don't create or change anything with it`;
+}
+
+/** The same on stderr, without --json. */
 export function readerNotice(slug: string): string {
-  return `gh-touchid: public read-only access as ${slug}[bot]; don't create or change anything with it`;
+  return `gh-touchid: ${readerNoticeText(slug)}`;
 }
 
 export interface MockReader {

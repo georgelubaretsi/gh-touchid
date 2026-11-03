@@ -17,10 +17,9 @@ func addAccount(login: String, token: String) throws -> String? {
     let scopes = owner.scopes.map { printable($0) }.flatMap { $0.isEmpty ? nil : $0 }
     fputs("GitHub confirms the token belongs to \(login); scopes: \(scopes ?? "none listed").\n", stderr)
     if token.hasPrefix("github_pat_") {
-        fputs(
-            "Warning: this is a fine-grained token; it cannot contribute to public repositories "
-                + "\(login) is not a member of. A classic token can.\n",
-            stderr
+        Notices.tell(
+            "this is a fine-grained token; it cannot contribute to public repositories \(login) is not a member "
+                + "of. A classic token can."
         )
     }
     try authenticate(.accountToken(login))

@@ -308,8 +308,8 @@ an App of yours, or one that names no repository (`gh search`, `gh api users/oct
   releases, Actions runs, search and GraphQL. Your private repositories stay invisible to it.
 - The token is made for that one use, used only when GitHub reports it has no permissions and no repository, and
   revoked when gh exits. It counts against the reader's own rate limit of 5,000 requests an hour, not yours.
-- Every use prints on stderr: `gh-touchid: public read-only access as <app>[bot]; don't create or change anything
-  with it`.
+- Every use tells the caller `public read-only access as <app>[bot]; don't create or change anything with it`: on
+  stderr after `gh-touchid: `, and with `--json` (so through `rpc` and `mcp` too) in the result's `notices`.
 - GitHub lets the bot open issues on any public repository, so gh-touchid refuses the commands that would:
   `gh issue create`, `gh api` posting to `repos/OWNER/REPO/issues`, and `gh api graphql` with `createIssue` or a
   query it cannot read. It does not refuse other writes GitHub might allow the bot ([details](#the-reader)).
@@ -351,7 +351,7 @@ git push
 ```
 
 Outside a session, each command asks for Touch ID. It then gets a token for one repository that acts as you, and
-prints `To approve this whole session once, run: gh-touchid session` to stderr.
+prints `gh-touchid: to approve this whole session once, run: gh-touchid session` to stderr.
 
 On GitHub, the work appears as your account, marked "via" the App. Tools that look for a person treat it as yours:
 Codex reviews the pull requests and answers `@codex review`, and `@me` searches and review requests work.
@@ -613,6 +613,10 @@ gh-touchid --help --json                         # every command as an MCP tool,
   whose path replaces it.
 - With `--json`, an error is the last line on stderr: `{"error": {"code": "no_app", "message": "…"}}`. The codes are
   stable.
+- What gh-touchid tells its caller besides the result goes to stderr as `gh-touchid: …` lines without `--json`, and
+  with it into the result's `notices`, a list present only when there is any: the reader's notice, a token that could
+  not be revoked, how to approve a session, a session's warnings, a problem with the background program. If the
+  command fails instead, they go to stderr before the error line.
 - Input is checked against the command's schema before anything is done, and every result against its output schema
   (a mismatch is an `output_invalid` error, a bug to report). Secrets (a client secret, a token, the reader's key)
   come only on stdin, never as flags or from an input file.
@@ -720,8 +724,8 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
   or through a placeholder such as `{owner}` that gh fills in later), and `gh api graphql` with `createIssue`, a
   query it cannot read, or a `-F` query with a placeholder. It finds the command as gh's parser does.
 - In the same tests GitHub refused the bot comments, labels, stars, gists and new repositories. Other writes
-  (reactions, forks, discussions, pull requests) were not tested, and gh-touchid does not refuse them. The notice on
-  stderr is advice, and an agent that has been prompt-injected can ignore it.
+  (reactions, forks, discussions, pull requests) were not tested, and gh-touchid does not refuse them. The notice, on
+  stderr or in `notices`, is advice, and an agent that has been prompt-injected can ignore it.
 - A reader token lasts an hour at most and is revoked when `gh` exits. Git never gets one.
 - The key never expires. Whoever reads it can make bot tokens with these limits until the key is deleted in the App's
   settings; `reader add` replaces it.

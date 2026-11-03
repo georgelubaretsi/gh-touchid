@@ -8,7 +8,7 @@ import Foundation
 // GH_REPO and the repository here, in a `gh api` endpoint and in `-F` values, which could spell out an issues route or
 // `createIssue` after this check: so a request that posts to an endpoint with one, or a typed query with one, is
 // refused too. Commands and flags are read as gh reads them (`readGitHubCommand`, `parsedArguments`). Other writes
-// GitHub refuses the reader on its own; the ones not tested are left to the notice every reader use prints.
+// GitHub refuses the reader on its own; the ones not tested are left to the notice every reader use gives.
 
 /// Whether `gh <arguments>` would open an issue, or might and cannot be told: then the reader is not used for it.
 func opensIssue(_ arguments: [String]) -> Bool {

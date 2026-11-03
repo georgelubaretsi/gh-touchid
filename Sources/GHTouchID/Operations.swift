@@ -304,9 +304,16 @@ func perform(
             fputs("\(message)\n", stderr)
         }
     }
-    let output = try operation.run(context, input)
+    if json {
+        Notices.keepForResult()
+    }
+    var output = try operation.run(context, input)
+    let notices = Notices.take()
+    if !notices.isEmpty {
+        output["notices"] = notices
+    }
     // checked on every call, as the input is: a result that breaks its schema would mislead whoever reads it
-    if let problem = operation.output.violation(output, path: "") {
+    if let problem = operation.declaredOutput.violation(output, path: "") {
         throw ToolError.outputInvalid(operation: operation.name, problem: problem)
     }
     if json {
@@ -349,6 +356,8 @@ struct ToldError: Error {
 /// Reports `error` on stderr and returns the exit status: in text mode `gh-touchid: <message>` (usage errors print
 /// the usage), with `--json` `{"error": {"code", "message"}}` as the last line.
 func report(_ error: Error, json: Bool) -> Int32 {
+    // the notices an operation kept for its result, which it will not return now
+    Notices.printKept()
     if let told = error as? ToldError {
         if json {
             fputs("\(jsonLine(["error": ["code": told.error.code, "message": told.error.description]]))\n", stderr)
@@ -394,7 +403,7 @@ func toolsDocument() -> [String: Any] {
             "title": operation.title,
             "description": operation.description,
             "inputSchema": operation.input.jsonSchema,
-            "outputSchema": operation.output.jsonSchema,
+            "outputSchema": operation.declaredOutput.jsonSchema,
             "annotations": [
                 "title": operation.title,
                 "readOnlyHint": operation.annotations.readOnly,
