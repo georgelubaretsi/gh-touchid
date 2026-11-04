@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`command`, `tool`, `title`, `usage`, `description`, `example`), and every error code with its exit status and
   meaning, under `errors` (`code`, `exit_status`, `description`). `tools`, which the MCP adapter serves, is unchanged.
 
+### Changed
+
+- The documentation moved from README.md into pages in `docs/`, starting at
+  [docs/index.md](docs/index.md); README.md is now a short overview. [docs/commands.md](docs/commands.md) and
+  [docs/errors.md](docs/errors.md) are made from gh-touchid's own declarations, so they list every command, its
+  input and output, and every error code, including `error`, which `--json` already reported for failures without a
+  code of their own. The release tarball includes `docs/`.
+
 ## [0.7.0] - 2026-11-03
 
 ### Fixed

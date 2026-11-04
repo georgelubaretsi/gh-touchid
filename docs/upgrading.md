@@ -45,8 +45,8 @@ upgrading, `gh` is whatever other `gh` comes first on PATH, or not found: pick o
 
 ## From 0.2
 
-- `unlock` is gone. Use [`session`](sessions.md#sessions) for unattended work and [`elevate`](sessions.md#elevating-a-repository) for
-  workflow changes.
+- `unlock` is gone. Use [`session`](sessions.md) for unattended work and
+  [`elevate`](sessions.md#elevating-a-repository) for workflow changes.
 - `set` and the tokens stored per repository are gone. Store a token per GitHub account with `account add` and use it
   with `as`. The old items have Keychain service `com.lubaretsi.gh-touchid` and account `owner/repo`. List them with
   `security find-generic-password -s com.lubaretsi.gh-touchid -a owner/repo` (this prints no secret), and delete each

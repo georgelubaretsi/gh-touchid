@@ -36,8 +36,10 @@ test *args:
     bun test --concurrent --timeout 30000 ./tests {{ args }}
     bun scripts/reference.ts --check build/test/gh-touchid
 
-# The workflows, the shell scripts with ShellCheck, and that only Launch.swift starts programs (scripts/check-launch.sh)
+# The workflows, the shell scripts with ShellCheck, that only Launch.swift starts programs (scripts/check-launch.sh), and
+# the documentation's links and #anchors, offline (lychee)
 lint:
     actionlint
     shellcheck scripts/*.sh
     scripts/check-launch.sh
+    lychee --offline --include-fragments --no-progress README.md SECURITY.md AGENTS.md CHANGELOG.md docs

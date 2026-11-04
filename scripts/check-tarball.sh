@@ -3,7 +3,7 @@
 # gh wrapper, `gh-touchid rpc` finding and running gh-touchid-adapter, the bundled gh's SHA-256 and cdhashes pinned in
 # both slices of gh-touchid, the earlier releases of release/known-releases built into both, a Developer ID signature
 # that meets releaseCodeRequirement (and the adapter's, which must not), and a changed gh refused. The release workflow
-# runs it on the tarball scripts/package.sh builds and again on the one scripts/sign.sh signs. It reads
+# runs it on the tarball scripts/package.sh builds and again on the one scripts/sign.sh signs. It reads docs/,
 # release/known-releases and BuildConfiguration.swift from the checkout it is in.
 #
 #   scripts/check-tarball.sh TARBALL [VERSION]
@@ -40,6 +40,12 @@ bin="$(ls "$root/bin")"
 [ -x "$root/libexec/bin/gh" ] || fail "libexec/bin/gh is missing or not executable"
 adapter="$root/libexec/gh-touchid/gh-touchid-adapter"
 [ -x "$adapter" ] || fail "libexec/gh-touchid/gh-touchid-adapter is missing or not executable"
+# README.md beside docs/, which it links into: every page of this checkout's docs/, as package.sh copies them
+checkout="$(cd "$(dirname "$0")/.." && pwd)"
+[ -f "$root/README.md" ] || fail "README.md is missing"
+for page in "$checkout"/docs/*.md; do
+  cmp -s "$page" "$root/docs/${page##*/}" || fail "docs/${page##*/} is missing or differs from this checkout's"
+done
 
 # Linked from other folders, as Homebrew links bin/ into its Cellar and opt/ to the installed version
 ln -s "$root/bin/gh-touchid" "$work/bin/"
@@ -90,7 +96,6 @@ done
 
 # The earlier releases of release/known-releases, in both slices of gh-touchid as knownReleaseList holds them:
 # `VERSION STATUS arm64=CDHASH,x86_64=CDHASH`. scripts/build.sh has checked each line.
-checkout="$(cd "$(dirname "$0")/.." && pwd)"
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     '' | '#'*) continue ;;

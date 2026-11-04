@@ -3,7 +3,7 @@
 gh-touchid runs on one person's Mac. It lets that person, and the programs they start (AI agents above all), use
 GitHub through `gh` and Git: public data through a reader App that can do almost nothing else, and everything beyond
 that only as far as the person approved with Touch ID. This file says what it protects, from whom, where data crosses
-a boundary, what it assumes and what it does not try to stop. README.md's "Security model" section has the same facts
+a boundary, what it assumes and what it does not try to stop. [security-model.md](security-model.md) has the same facts
 from the user's side; Sources/GHTouchID/Access.swift has the policy itself.
 
 ## What it protects

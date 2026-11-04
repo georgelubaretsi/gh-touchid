@@ -110,7 +110,7 @@ hardened runtime, and are notarized by Apple. (GitHub's `gh` inside stays as Git
   `gh-touchid`.
 - The hardened runtime keeps other programs running as you from loading code into gh-touchid, such as a library
   through `DYLD_INSERT_LIBRARIES`. gh-touchid still does not defend against code that already runs as you (see
-  [Security model](security-model.md#security-model)).
+  [Security model](security-model.md)).
 - macOS runs a quarantined copy, such as a browser download, after checking it with Apple (see above).
 
 Development builds and the flake's build from source (`from-source`) are only ad hoc signed, by the linker, and run
