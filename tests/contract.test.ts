@@ -1,7 +1,9 @@
 // The interfaces contract: every operation is declared once and listed by `--help --json` as an MCP tool with valid
 // schemas; wrong input (missing, unknown, mistyped, outside the enum, too large) is refused with exit 2 and a JSON
 // `invalid_input` error before anything happens; `--json` output fits the declared output schema; `--input -` and
-// `--input <file>` are the same input; exit statuses are 0, 2 and 1, and gh's own passes through.
+// `--input <file>` are the same input; exit statuses are 0, 2 and 1, and gh's own passes through. `--help --json` also
+// lists every command as `help` shows it and every error code with its exit status, which every `--json` error keeps
+// (the harness checks each run of the test build).
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -113,8 +115,9 @@ describe("--help --json", () => {
     expect((byName.git_credential!.outputSchema.properties as Record<string, JsonSchema>).password!.writeOnly).toBe(
       true,
     );
-    // `help --json` is the same
-    expect(JSON.parse((await env.run(["help", "--json"])).stdout).tools).toEqual(listed);
+    // `help --json` is the same document
+    const document = JSON.parse((await env.run(["--help", "--json"])).stdout);
+    expect(JSON.parse((await env.run(["help", "--json"])).stdout)).toEqual(document);
   });
 
   test("the operations' words reach each operation, as `help` shows them", async () => {
@@ -122,6 +125,52 @@ describe("--help --json", () => {
     const help = await env.run(["help"]);
     for (const name of operations) {
       expect(help.stdout).toContain(`gh-touchid ${words(name).join(" ")}`);
+    }
+  });
+
+  test("lists every command, one entry per tool", async () => {
+    await using env = await TestEnv.create();
+    const document = JSON.parse((await env.run(["--help", "--json"])).stdout);
+    const commands: { command: string; tool?: string; usage: string; example: string }[] = document.commands;
+    const names = (await tools(env)).map((tool) => tool.name);
+    for (const name of names) {
+      expect(commands.filter((command) => command.tool === name), name).toHaveLength(1);
+    }
+    for (const command of commands) {
+      if (command.tool !== undefined) {
+        expect(names).toContain(command.tool);
+      }
+      expect(command.usage).toStartWith(`gh-touchid ${command.command}`);
+      expect(command.example).toStartWith(`gh-touchid ${command.command}`);
+    }
+  });
+
+  test("lists every error code once, with exit status 1 or 2", async () => {
+    await using env = await TestEnv.create();
+    const errors: { code: string; exit_status: number }[] = JSON.parse(
+      (await env.run(["--help", "--json"])).stdout,
+    ).errors;
+    const codes = errors.map((error) => error.code);
+    expect(new Set(codes).size).toBe(codes.length);
+    for (const error of errors) {
+      expect(error.code).toMatch(/^[a-z_]+$/);
+      expect([1, 2]).toContain(error.exit_status);
+    }
+  });
+
+  test("a failure of either exit status reports a declared code with its declared status", async () => {
+    await using env = await TestEnv.create();
+    const declared = new Map<string, number>(
+      JSON.parse((await env.run(["--help", "--json"])).stdout).errors.map(
+        (error: { code: string; exit_status: number }) => [error.code, error.exit_status],
+      ),
+    );
+    // a wrong use (2), and an account that is not stored (1); the harness checks every other --json failure so
+    for (const args of [["--json", "version", "extra"], ["--json", "account", "remove", "nobody"]]) {
+      const result = await env.run(args);
+      const { code } = lastError(result.stderr);
+      expect(declared.has(code), code).toBe(true);
+      expect(result.status).toBe(declared.get(code)!);
     }
   });
 });

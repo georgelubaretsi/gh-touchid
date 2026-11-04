@@ -7,7 +7,8 @@ import Foundation
 // the output is printed as one JSON value with `--json`, else as the operation's text. Errors carry stable codes:
 // with `--json`, the last line on stderr is `{"error": {"code", "message"}}`. Exit status 0 is success, 2 wrong
 // input, 1 anything else; `gh` and `as` pass on the status of what they ran, except with `--json`, whose output
-// carries it. `--help --json` prints every operation as an MCP tool, for the adapter behind `rpc` and `mcp`.
+// carries it. `--help --json` prints every operation as an MCP tool, for the adapter behind `rpc` and `mcp`, with
+// every command's usage and every error code, from which docs/commands.md and docs/errors.md are generated.
 //
 // Global flags `--json`, `--input <file|->` and `--no-input` go before or after the command's words, except after
 // `gh`, `as` and `git credential`, whose arguments belong to another program: there they go before.
@@ -360,18 +361,19 @@ func report(_ error: Error, json: Bool) -> Int32 {
     Notices.printKept()
     if let told = error as? ToldError {
         if json {
-            fputs("\(jsonLine(["error": ["code": told.error.code, "message": told.error.description]]))\n", stderr)
+            let envelope = ["error": ["code": told.error.code.rawValue, "message": told.error.description]]
+            fputs("\(jsonLine(envelope))\n", stderr)
         }
         return told.error.exitStatus
     }
     guard let error = error as? ToolError else {
         let message = "\(error)"
         if json {
-            fputs("\(jsonLine(["error": ["code": "error", "message": message]]))\n", stderr)
+            fputs("\(jsonLine(["error": ["code": ErrorCode.unexpected.rawValue, "message": message]]))\n", stderr)
         } else {
             fputs("gh-touchid: \(message)\n", stderr)
         }
-        return 1
+        return ErrorCode.unexpected.exitStatus
     }
     if json {
         let message: String
@@ -383,7 +385,7 @@ func report(_ error: Error, json: Bool) -> Int32 {
         default:
             message = error.description
         }
-        fputs("\(jsonLine(["error": ["code": error.code, "message": message]]))\n", stderr)
+        fputs("\(jsonLine(["error": ["code": error.code.rawValue, "message": message]]))\n", stderr)
         return error.exitStatus
     }
     switch error {
@@ -395,8 +397,9 @@ func report(_ error: Error, json: Bool) -> Int32 {
     return error.exitStatus
 }
 
-/// `--help --json`: every operation as an MCP tool. A tool with a secret input or output says so in `_meta`.
-func toolsDocument() -> [String: Any] {
+/// `--help --json`: every operation as an MCP tool (`tools`, which the adapter reads), every command as `help` shows it
+/// (`commands`) and every error code (`errors`). A tool with a secret input or output says so in `_meta`.
+func helpDocument() -> [String: Any] {
     let tools = operations.map { operation -> [String: Any] in
         var tool: [String: Any] = [
             "name": operation.name,
@@ -419,7 +422,21 @@ func toolsDocument() -> [String: Any] {
         }
         return tool
     }
-    return ["tools": tools]
+    let commands = Usage.commands.map { command -> [String: Any] in
+        var entry: [String: Any] = [
+            "command": command.words.joined(separator: " "),
+            "title": command.title,
+            "usage": command.synopsis,
+            "description": command.description,
+            "example": command.example,
+        ]
+        entry["tool"] = command.tool
+        return entry
+    }
+    let errors = ErrorCode.allCases.map { code -> [String: Any] in
+        ["code": code.rawValue, "exit_status": Int(code.exitStatus), "description": code.meaning]
+    }
+    return ["tools": tools, "commands": commands, "errors": errors]
 }
 
 /// The synopsis of an operation as `help` shows it, from its words, positional fields and flags.

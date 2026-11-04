@@ -6,7 +6,8 @@
 //
 // Disposing it stops the gh-touchid agents it started, kills processes left running, stops the mock and deletes the
 // folder. Only the test build runs here: it never shows Touch ID, never reads the Keychain and never writes the
-// user's access log.
+// user's access log. A `--json` run of it that ends with an error must name a code its `--help --json` declares and
+// exit with that code's status (`checkDeclaredError`), so every test that fails a command checks docs/errors.md too.
 
 import { createConnection } from "node:net";
 import {
@@ -126,7 +127,11 @@ export class Running {
   stderr = "";
   readonly finished: Promise<RunResult>;
 
-  constructor(readonly process: Subprocess<"ignore" | "pipe", "pipe", "pipe">) {
+  constructor(
+    readonly process: Subprocess<"ignore" | "pipe", "pipe", "pipe">,
+    /** Throws when the finished run breaks a rule every run must keep; the run's `finished` then rejects. */
+    check: (result: RunResult) => void = () => {},
+  ) {
     const collect = async (stream: ReadableStream<Uint8Array>, field: "stdout" | "stderr") => {
       const decoder = new TextDecoder();
       for await (const chunk of stream) {
@@ -137,14 +142,18 @@ export class Running {
       collect(process.stdout, "stdout"),
       collect(process.stderr, "stderr"),
       process.exited,
-    ]).then(() => ({
-      status: process.signalCode ? null : process.exitCode,
-      signal: process.signalCode,
-      stdout: this.stdout,
-      stderr: this.stderr,
-      auth: prefixedLines(this.stderr, "AUTH: "),
-      open: prefixedLines(this.stderr, "OPEN: "),
-    }));
+    ]).then(() => {
+      const result = {
+        status: process.signalCode ? null : process.exitCode,
+        signal: process.signalCode,
+        stdout: this.stdout,
+        stderr: this.stderr,
+        auth: prefixedLines(this.stderr, "AUTH: "),
+        open: prefixedLines(this.stderr, "OPEN: "),
+      };
+      check(result);
+      return result;
+    });
   }
 
   get exited(): boolean {
@@ -252,9 +261,16 @@ export class TestEnv {
     );
   }
 
-  /** Starts the test build (or `options.binary`) with `args`; watch it with the returned `Running`. */
+  /**
+   * Starts the test build (or `options.binary`) with `args`; watch it with the returned `Running`. A `--json` run of
+   * the test build that ends stderr with an error must report a code `--help --json` declares, with its exit status.
+   */
   start(args: string[], options: RunOptions = {}): Running {
-    return this.startCommand([options.binary ?? binary, ...args], options);
+    const command = [options.binary ?? binary, ...args];
+    if (command[0] !== binary || !args.includes("--json")) {
+      return this.startCommand(command, options);
+    }
+    return this.startCommand(command, options, (result) => checkDeclaredError(result, this.environment()));
   }
 
   /** Runs the test build with `args` to the end. */
@@ -263,7 +279,7 @@ export class TestEnv {
   }
 
   /** Starts any command (such as `git`) in the same clean environment. */
-  startCommand(command: string[], options: RunOptions = {}): Running {
+  startCommand(command: string[], options: RunOptions = {}, check?: (result: RunResult) => void): Running {
     const running = new Running(
       Bun.spawn(options.tty ? ["/usr/bin/script", "-q", "/dev/null", ...command] : command, {
         cwd: options.cwd ?? this.workDir,
@@ -272,6 +288,7 @@ export class TestEnv {
         stdout: "pipe",
         stderr: "pipe",
       }) as Subprocess<"ignore" | "pipe", "pipe", "pipe">,
+      check,
     );
     this.started.push(running);
     return running;
@@ -536,6 +553,39 @@ function agentRequest(socket: string, request: Record<string, unknown>): Promise
   });
   connection.on("end", () => finish(undefined));
   return promise;
+}
+
+/** The test build's error codes and their exit statuses, from its `--help --json`; read once. */
+let declaredErrors: Map<string, number> | undefined;
+
+/**
+ * Fails a run whose stderr ends with a `{"error": …}` envelope that names a code the test build does not declare, or
+ * whose exit status is not the one declared for that code: what docs/errors.md tells script authors must hold.
+ */
+function checkDeclaredError(result: RunResult, environment: Record<string, string>): void {
+  const last = result.stderr.trimEnd().split("\n").pop() ?? "";
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(last);
+  } catch {
+    return;
+  }
+  const error = (envelope as { error?: { code?: unknown } } | null)?.error;
+  if (typeof error?.code !== "string" || result.status === null) {
+    return;
+  }
+  if (declaredErrors === undefined) {
+    const help = Bun.spawnSync([binary, "--help", "--json"], { env: environment });
+    const errors: { code: string; exit_status: number }[] = JSON.parse(help.stdout.toString()).errors;
+    declaredErrors = new Map(errors.map((declared) => [declared.code, declared.exit_status]));
+  }
+  const status = declaredErrors.get(error.code);
+  if (status === undefined) {
+    throw new Error(`gh-touchid reported the undeclared error code ${error.code}:\n${result.stderr}`);
+  }
+  if (result.status !== status) {
+    throw new Error(`gh-touchid exited ${result.status} with ${error.code}, declared ${status}:\n${result.stderr}`);
+  }
 }
 
 /** The `{"error": {code, message}}` that ends stderr with --json; throws when the last line is not one. */

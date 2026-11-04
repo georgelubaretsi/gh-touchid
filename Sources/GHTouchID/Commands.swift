@@ -33,7 +33,7 @@ private func runCommand(_ arguments: [String], options: GlobalOptions) throws ->
             guard rest.isEmpty, options.input == nil else {
                 throw ToolError.usage
             }
-            print(jsonLine(toolsDocument()))
+            print(jsonLine(helpDocument()))
             return 0
         }
         guard rest.count <= 1 else {
@@ -696,7 +696,7 @@ func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? 
     let command: GitHubCommandLine
     do {
         command = try allowedGitHubCommand(arguments)
-    } catch let refusal as ToolError where refusal.code == "forbidden_command" || refusal.code == "unknown_command" {
+    } catch let refusal as ToolError where refusal.code == .forbiddenCommand || refusal.code == .unknownCommand {
         let summary = commandSummary(["gh"] + arguments.prefix(2))
         appendAccessLog("refused \(summary) to \(processChain(getpid())): \(refusal)")
         throw refusal

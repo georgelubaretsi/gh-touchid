@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `gh-touchid --help --json` (and `help --json`) also lists every command as `help` shows it, under `commands`
+  (`command`, `tool`, `title`, `usage`, `description`, `example`), and every error code with its exit status and
+  meaning, under `errors` (`code`, `exit_status`, `description`). `tools`, which the MCP adapter serves, is unchanged.
+
 ## [0.7.0] - 2026-11-03
 
 ### Fixed
