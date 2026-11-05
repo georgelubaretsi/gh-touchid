@@ -17,6 +17,7 @@
 #                                     what `gh-touchid rpc|mcp` runs (JSON-RPC and MCP over stdio), found beside gh
 #     LICENSE
 #     README.md
+#     docs/                           the documentation pages README.md links to (docs/*.md)
 #
 #   scripts/package.sh [--output FOLDER] [--xcode PATH] [--xcode-version VERSION]
 #
@@ -90,5 +91,7 @@ exec "${self%/libexec/bin/*}/bin/gh-touchid" gh "$@"
 EOF
 chmod 755 "$stage/libexec/bin/gh"
 install -m 644 "$root/LICENSE" "$root/README.md" "$stage/"
+install -d -m 755 "$stage/docs"
+install -m 644 "$root"/docs/*.md "$stage/docs/"
 
 "$root/scripts/pack.sh" "$stage" "$output"

@@ -195,6 +195,7 @@
               pkgs.bun
               pkgs.git
               pkgs.just
+              pkgs.lychee
               pkgs.shellcheck
             ];
           };

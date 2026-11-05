@@ -17,19 +17,29 @@ package *args:
 gh-reference:
     scripts/pinned-gh.sh reference > release/gh-reference.md
 
+# docs/commands.md and docs/errors.md from `--help --json` of a test build of these sources, made in build/reference/
+# with $XCODE when it is set (scripts/reference.ts); review their diff
+reference:
+    scripts/build.sh --testing --no-adapter --output build/reference/gh-touchid ${XCODE:+--xcode "$XCODE"}
+    bun scripts/reference.ts build/reference/gh-touchid
+
 # The Homebrew formula checked against a tarball (default: the one in dist/) with a throwaway newest Homebrew
 check-formula tarball="dist":
     nix run .#check-formula -- {{ tarball }}
 
 # The black-box tests in tests/ (Bun, with the dependencies locked in tests/bun.lock) against the test builds in
-# build/test/ (scripts/test-builds.sh), made with $XCODE when it is set
+# build/test/ (scripts/test-builds.sh), made with $XCODE when it is set; then that docs/commands.md and docs/errors.md
+# are what the test build declares (scripts/reference.ts --check)
 test *args:
     scripts/test-builds.sh ${XCODE:+--xcode "$XCODE"}
     bun install --cwd tests --frozen-lockfile
     bun test --concurrent --timeout 30000 ./tests {{ args }}
+    bun scripts/reference.ts --check build/test/gh-touchid
 
-# The workflows, the shell scripts with ShellCheck, and that only Launch.swift starts programs (scripts/check-launch.sh)
+# The workflows, the shell scripts with ShellCheck, that only Launch.swift starts programs (scripts/check-launch.sh), and
+# the documentation's links and #anchors, offline (lychee)
 lint:
     actionlint
     shellcheck scripts/*.sh
     scripts/check-launch.sh
+    lychee --offline --include-fragments --no-progress README.md SECURITY.md AGENTS.md CHANGELOG.md docs
