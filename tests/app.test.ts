@@ -47,7 +47,7 @@ describe("app create", () => {
       expect(manifest.public).toBe(false);
       expect(manifest.redirect_url).toStartWith("http://127.0.0.1:");
       expect(manifest.name).toBe("acme-touchid");
-      // tokens get the everyday ones; workflows, environments and secrets only while elevated for them
+      // tokens get the everyday ones; workflows, environments, secrets and variables only while elevated for them
       expect(manifest.default_permissions).toEqual({
         actions: "write",
         contents: "write",
@@ -59,6 +59,7 @@ describe("app create", () => {
         workflows: "write",
         environments: "write",
         secrets: "write",
+        actions_variables: "write",
       });
     });
   }

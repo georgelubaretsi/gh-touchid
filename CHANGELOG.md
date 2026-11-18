@@ -15,10 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gh-touchid elevate --permission NAME` (repeatable; `permissions` in `--input`) elevates the repositories for
   other permissions of the owner's App, such as `environments` or `secrets`. `elevate` alone still adds `workflows`.
   The Touch ID window names the permissions, and `status` lists each elevated permission per repository.
-- `gh-touchid app create` also asks for Environments and Secrets (read and write), which tokens get only while their
-  repository is elevated for them: `elevate --permission environments` lets an agent set an environment's secrets and
-  variables, `--permission secrets` the repository's Actions secrets. For its Actions variables, add Variables to the
-  App on GitHub and elevate with `--permission actions_variables`.
+- `gh-touchid app create` also asks for Environments, Secrets and Variables (read and write), which tokens get only
+  while their repository is elevated for them: `elevate --permission environments` lets an agent set an environment's
+  secrets and variables, `--permission secrets` the repository's Actions secrets, and `--permission
+  actions_variables` its Actions variables.
 
 ### Changed
 
