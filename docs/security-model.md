@@ -8,8 +8,9 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
 
 - Every token gh-touchid makes acts as you, except the reader's ([below](#the-reader)). It is narrowed from your
   sign-in to the owner's App (`POST /applications/{client_id}/token/scoped`) to one repository, with only the
-  permissions `app create` gives an App, without `workflows`, plus each permission the repository is
-  [elevated](sessions.md#elevating-a-repository) for, at the level the App has. `elevate` alone adds `workflows`;
+  everyday permissions (contents, pull requests, issues and Actions to write; checks, commit statuses and metadata to
+  read), plus each permission the repository is [elevated](sessions.md#elevating-a-repository) for, at the level the
+  App has. `elevate` alone adds `workflows`;
   `elevate --permission` adds others, only for the repositories and time elevated. Issue-only tokens never include
   `workflows`.
 - A narrowed token lasts as long as the sign-in's access token: at most 8 hours, at least one. gh-touchid renews the

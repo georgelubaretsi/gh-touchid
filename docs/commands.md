@@ -380,11 +380,12 @@ gh-touchid gh <arguments...>
 `gh` runs GitHub CLI with a token for one repository: the one named with -R/--repo, for `gh api` the one its endpoint
 names, for `gh repo view OWNER/REPO` and the like their argument, else GH_REPO, else the current repository's origin; a
 GraphQL query is not read, so if gh fails with a token taken that way, a notice names its repository and what to set
-instead. The token acts as you through the owner's App with only the permissions `app create` gives an App, without
-workflows; `elevate` adds others for a while. If gh fails with a token made without one the App has, a notice names it.
-Outside a session, each use asks for Touch ID. With no repository, or for an owner without an App, it uses the public
-reader when one is stored (no Touch ID, public data only), and otherwise refuses before asking. Everything after `gh`
-goes to GitHub CLI: `gh-touchid gh --help` is its help. With --json, its output is captured.
+instead. The token acts as you through the owner's App with only its everyday permissions (contents, pull requests,
+issues and Actions; checks, commit statuses and metadata to read); `elevate` adds others, such as workflows, for a
+while. If gh fails with a token made without one the App has, a notice names it. Outside a session, each use asks for
+Touch ID. With no repository, or for an owner without an App, it uses the public reader when one is stored (no Touch ID,
+public data only), and otherwise refuses before asking. Everything after `gh` goes to GitHub CLI: `gh-touchid gh --help`
+is its help. With --json, its output is captured.
 
 Example:
 
@@ -545,8 +546,8 @@ gh-touchid elevate --for <for> [--repo <repo>]... [--permission <permission>]...
 
 `elevate` lets tokens for the repositories (without --repo, the current one) include more of the owner's App's
 permissions for a while: workflows, or the ones named with --permission, such as environments or secrets. Tokens get a
-permission beyond what `app create` gives an App only this way. --for takes 30m, 8h, 1h30m, at most 1d. It asks for
-Touch ID, naming the permissions.
+permission beyond the everyday ones only this way. --for takes 30m, 8h, 1h30m, at most 1d. It asks for Touch ID, naming
+the permissions.
 
 Example:
 

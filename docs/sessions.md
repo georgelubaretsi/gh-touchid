@@ -42,11 +42,12 @@ until it exits.
 
 # Elevating a repository
 
-Tokens get only the permissions [`app create`](setup.md#1-a-github-app-per-owner) gives an App, at most at its
-levels: contents, pull requests, issues and Actions to write; checks, commit statuses and metadata to read. Everything
-else the App has reaches a token only while the repository is elevated for it: `workflows`, which changing
-`.github/workflows` needs, and any permission added to the App, such as Environments, Secrets or Administration, or
-one of the others at a higher level. A permission GitHub adds later is held back the same way.
+Tokens get only the everyday permissions, at most at these levels: contents, pull requests, issues and Actions to
+write; checks, commit statuses and metadata to read. Everything else the App has reaches a token only while the
+repository is elevated for it: `workflows`, which changing `.github/workflows` needs; `environments` and `secrets`,
+which [`app create`](setup.md#1-a-github-app-per-owner) also asks for, to set an environment's secrets and variables
+or the repository's Actions secrets; any permission added to the App, such as Administration; and one of the
+everyday ones at a higher level. A permission GitHub adds later is held back the same way.
 
 Elevating a repository lets the permissions you name through for a while, at the level the App has:
 

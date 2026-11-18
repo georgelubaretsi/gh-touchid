@@ -19,10 +19,10 @@ struct ScopedToken {
     let heldBack: [String: String]
 }
 
-/// The permissions a token for a repository may have without elevation, each at most at this level: those `app
-/// create` gives an App, without `workflows`. Anything else an installation has reaches a token only while the
-/// repository is elevated for it: `workflows`, a higher level of one of these, and every permission an owner added to
-/// the App (environments, secrets, administration and the like) or GitHub introduces later.
+/// The permissions a token for a repository may have without elevation, each at most at this level: what working on
+/// code, pull requests, issues and Actions runs needs. Anything else an installation has reaches a token only while
+/// the repository is elevated for it: `workflows`, `environments` and `secrets` (which `app create` also asks for), a
+/// higher level of one of these, and every permission an owner added to the App or GitHub introduces later.
 let everydayPermissions = [
     "actions": "write",
     "contents": "write",

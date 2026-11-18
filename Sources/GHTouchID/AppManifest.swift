@@ -13,9 +13,12 @@ import Foundation
 // Touch ID stores them, and the browser goes on to the installation page while gh-touchid waits for the installation
 // and proves it with one token, checked and revoked.
 
-/// What `app create` asks for: the everyday permissions (GitHubApp.swift), which every token may have, and `workflows`,
-/// which only an elevated repository's tokens get.
-private let manifestPermissions = everydayPermissions.merging(["workflows": "write"]) { everyday, _ in everyday }
+/// What `app create` asks for: the everyday permissions (GitHubApp.swift), which every token may have, and those only a
+/// repository's elevation for them adds to its tokens: `workflows`, `environments` (an environment's secrets and
+/// variables) and `secrets` (the repository's Actions secrets).
+private let manifestPermissions = everydayPermissions.merging(
+    ["workflows": "write", "environments": "write", "secrets": "write"]
+) { everyday, _ in everyday }
 
 /// How long the manifest step may take; GitHub's codes last an hour too.
 private let manifestTimeout: TimeInterval = 60 * 60

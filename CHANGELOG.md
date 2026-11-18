@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gh-touchid elevate --permission NAME` (repeatable; `permissions` in `--input`) elevates the repositories for
   other permissions of the owner's App, such as `environments` or `secrets`. `elevate` alone still adds `workflows`.
   The Touch ID window names the permissions, and `status` lists each elevated permission per repository.
+- `gh-touchid app create` also asks for Environments and Secrets (read and write), which tokens get only while their
+  repository is elevated for them: `elevate --permission environments` lets an agent set an environment's secrets and
+  variables, `--permission secrets` the repository's Actions secrets.
 
 ### Changed
 
@@ -26,8 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Tokens for a repository get only the permissions `app create` gives an App (contents, pull requests, issues and
-  Actions to write; checks, commit statuses and metadata to read), at most at those levels, plus the permissions the
+- Tokens for a repository get only the everyday permissions (contents, pull requests, issues and Actions to write;
+  checks, commit statuses and metadata to read), at most at those levels, plus the permissions the
   repository is elevated for. Before, they got every permission of the owner's App except `workflows`, so a
   permission added to the App, such as Environments, Secrets or Administration, reached every session's tokens. Now
   each needs `elevate --permission`, only for the repositories and time elevated, and so does any permission GitHub
