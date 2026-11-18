@@ -898,7 +898,8 @@ private func registerSession(repositories named: [String]?) throws -> [String: A
 
 /// `elevate`: tokens for these repositories (by default the current one) get these permissions (by default
 /// `workflows`) for `duration`. An agent of protocol 1 or 2 elevates for `workflows` only, so the dialog for other
-/// permissions is not shown while one runs.
+/// permissions is not shown while one runs. Before the dialog the agent is only asked, never started: a new agent with
+/// nothing to hold stops within a minute, while the dialog may wait five.
 private func elevate(
     duration: String,
     repositories named: [String]?,
@@ -908,16 +909,17 @@ private func elevate(
     let repositories = try repositoriesOption(named.map { ["--repo": $0] } ?? [:])
     let given = Array(Set((requested ?? []).compactMap(validPermission))).sorted()
     let permissions = given.isEmpty ? defaultElevation : given
-    try ensureAgent()
-    guard spokenProtocol >= 3 || permissions == defaultElevation else {
-        throw ToolError.agent(
-            "the background program is an earlier gh-touchid, which elevates for workflows only; it stops once its "
-                + "sessions and elevations end, or run `gh-touchid lock` to end them now"
-        )
+    _ = agentRequest(["op": "status"])
+    if let agentProblem {
+        throw ToolError.agent(agentProblem)
     }
+    try refuseEarlierProtocol(permissions)
     try authenticate(
         .elevation(repositories: repositories, permissions: permissions, seconds: seconds, by: requester())
     )
+    // the agent asked before may have stopped, or another taken its place, while the dialog waited
+    try ensureAgent()
+    try refuseEarlierProtocol(permissions)
     let reply = agentRequest(["op": "elevate", "repos": repositories, "seconds": seconds, "permissions": permissions])
     guard reply?["ok"] as? Bool == true else {
         throw ToolError.agent(reply?["error"] as? String ?? "the agent did not accept the elevation")
@@ -933,4 +935,15 @@ private func elevate(
         "permissions": permissions,
         "until": ISO8601DateFormatter().string(from: until),
     ]
+}
+
+/// Refuses permissions other than `workflows` while the agent speaks protocol 1 or 2, whose elevations are for
+/// `workflows` only.
+private func refuseEarlierProtocol(_ permissions: [String]) throws {
+    guard spokenProtocol >= 3 || permissions == defaultElevation else {
+        throw ToolError.agent(
+            "the background program is an earlier gh-touchid, which elevates for workflows only; it stops once its "
+                + "sessions and elevations end, or run `gh-touchid lock` to end them now"
+        )
+    }
 }

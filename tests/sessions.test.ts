@@ -149,13 +149,16 @@ describe("elevate", () => {
     expect((await env.run(["status"])).stdout).toContain("No sessions or elevations.");
   });
 
-  test("a denied Touch ID elevates nothing", async () => {
+  test("a denied Touch ID elevates nothing, and no agent is started for the dialog", async () => {
     await using env = await TestEnv.create();
     const result = await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets"], {
       env: { GH_TOUCHID_TEST_DENY: "1" },
     });
     expect(result.status).toBe(1);
     expect(result.auth).toHaveLength(1);
+    // an agent started before the dialog, with nothing to hold, could stop while a slow approval waits
+    expect(env.agentSockets()).toEqual([]);
+    expect(env.accessLog().filter((line) => line.includes("agent started"))).toEqual([]);
     expect((await env.run(["status"])).stdout).not.toContain("Elevated");
   });
 });
