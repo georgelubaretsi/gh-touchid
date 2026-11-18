@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The Touch ID window names the permissions, and `status` lists each elevated permission per repository.
 - `gh-touchid app create` also asks for Environments and Secrets (read and write), which tokens get only while their
   repository is elevated for them: `elevate --permission environments` lets an agent set an environment's secrets and
-  variables, `--permission secrets` the repository's Actions secrets.
+  variables, `--permission secrets` the repository's Actions secrets. For its Actions variables, add Variables to the
+  App on GitHub and elevate with `--permission actions_variables`.
 
 ### Changed
 

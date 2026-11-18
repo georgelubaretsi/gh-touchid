@@ -497,7 +497,7 @@ private func elevationRisk(_ permission: String) -> String {
     switch permission {
     case "workflows":
         return "workflows can read secrets"
-    case "environments", "secrets":
+    case "environments", "secrets", "actions_variables":
         return "secrets and variables can be replaced"
     case "administration":
         return "settings and branch protection can change"

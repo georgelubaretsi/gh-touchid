@@ -46,8 +46,9 @@ Tokens get only the everyday permissions, at most at these levels: contents, pul
 write; checks, commit statuses and metadata to read. Everything else the App has reaches a token only while the
 repository is elevated for it: `workflows`, which changing `.github/workflows` needs; `environments` and `secrets`,
 which [`app create`](setup.md#1-a-github-app-per-owner) also asks for, to set an environment's secrets and variables
-or the repository's Actions secrets; any permission added to the App, such as Administration; and one of the
-everyday ones at a higher level. A permission GitHub adds later is held back the same way.
+or the repository's Actions secrets; any permission added to the App, such as Variables (`actions_variables`, for
+the repository's Actions variables) or Administration; and one of the everyday ones at a higher level. A permission
+GitHub adds later is held back the same way.
 
 Elevating a repository lets the permissions you name through for a while, at the level the App has:
 
@@ -59,9 +60,9 @@ gh-touchid elevate --for 30m --repo acme/one --permission environments --permiss
 - `elevate` asks for Touch ID. The window names the repositories, the permissions and the duration.
 - `--for` takes `30m`, `8h`, `1h30m` or `1d`, the longest.
 - Each `--repo` names one repository. Without one, the current repository is elevated.
-- Each `--permission` names one permission as GitHub spells it (`environments`, `secrets`, `administration`).
-  Without one, `elevate` adds `workflows`. A permission is elevated only for the repositories named, and only
-  until the end time.
+- Each `--permission` names one permission as GitHub spells it (`environments`, `secrets`, `actions_variables`,
+  `administration`). Without one, `elevate` adds `workflows`. A permission is elevated only for the repositories
+  named, and only until the end time.
 - Running `elevate` again sets a new end time for the permissions it names.
 - `status` lists each elevated repository and permission with its end time.
 - Elevation counts when a token is made, which is after any Touch ID dialog. A command still waiting on a dialog when

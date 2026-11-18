@@ -42,8 +42,8 @@ that, `gh` and Git work without Touch ID for the repositories in the current fol
 ## How it protects you
 
 - Every token gh-touchid makes to act as you is narrowed from your sign-in to the owner's App to one repository,
-  with only everyday permissions (no `workflows`, `environments` or `secrets`, nothing added to the App later) plus
-  those the repository is elevated for, and the token of a `gh` command is revoked when `gh` exits
+  with only everyday permissions (no `workflows`, `environments`, `secrets` or `actions_variables`, nothing added to
+  the App later) plus those the repository is elevated for, and the token of a `gh` command is revoked when `gh` exits
   ([details](docs/security-model.md#tokens-and-what-they-reach)).
 - Narrowed tokens are never cached, never written to disk, and never exported to the calling shell; your sign-in and
   the App's client secret stay in the login Keychain, on this Mac only and never synced

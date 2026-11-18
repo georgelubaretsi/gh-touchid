@@ -15,7 +15,11 @@ import Foundation
 
 /// What `app create` asks for: the everyday permissions (GitHubApp.swift), which every token may have, and those only a
 /// repository's elevation for them adds to its tokens: `workflows`, `environments` (an environment's secrets and
-/// variables) and `secrets` (the repository's Actions secrets).
+/// variables) and `secrets` (the repository's Actions secrets). Not Variables (the repository's Actions variables):
+/// GitHub names it `actions_variables` in installations and tokens, but its published permission schema lacks the
+/// name (github/rest-api-description#5437), no manifest is known to have used it, and GitHub refuses a whole manifest
+/// over a name it does not take. An owner can add Variables on the App's page; `elevate --permission
+/// actions_variables` then lets a token have it.
 private let manifestPermissions = everydayPermissions.merging(
     ["workflows": "write", "environments": "write", "secrets": "write"]
 ) { everyday, _ in everyday }

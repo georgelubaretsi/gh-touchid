@@ -16,16 +16,20 @@ gh-touchid opens a local page, `http://127.0.0.1:47911/`, which sends GitHub a m
 named `acme-touchid` unless `--name` says otherwise. It has no webhook, the callback URL
 `http://127.0.0.1:47911/callback`, and these repository permissions:
 
-| Permission                                                                | Access         |
-| ------------------------------------------------------------------------- | -------------- |
+| Permission                                                                 | Access         |
+| -------------------------------------------------------------------------- | -------------- |
 | Contents, Pull requests, Issues, Actions, Workflows, Environments, Secrets | Read and write |
-| Checks, Commit statuses, Metadata                                         | Read-only      |
+| Checks, Commit statuses, Metadata                                          | Read-only      |
 
 Tokens get these permissions without Workflows, Environments and Secrets. Those three, and any permission you give
 the App later, reach a token only while its repository is [elevated](sessions.md#elevating-a-repository) for them:
-`elevate` alone adds Workflows, and `elevate --permission NAME` adds another. For example, `gh-touchid elevate --for
-30m --permission environments` lets an agent set an environment's secrets and variables. An App made by 0.7.0 or
-earlier lacks Environments and Secrets; add them on its settings page, and accept them where it is installed.
+`elevate` alone adds Workflows, and `elevate --permission NAME` adds another, named as GitHub names it:
+`environments` (an environment's secrets and variables) or `secrets` (the repository's Actions secrets). For example,
+`gh-touchid elevate --for 30m --permission environments` lets an agent set an environment's secrets and variables.
+An App made by 0.7.0 or earlier lacks Environments and Secrets; add them on its settings page, and accept them where
+it is installed. For the repository's Actions variables, add Variables (read and write) the same way and elevate with
+`--permission actions_variables`; `app create` does not ask for it, because GitHub has not documented that name for
+a manifest.
 
 The browser then goes through three pages on GitHub:
 
