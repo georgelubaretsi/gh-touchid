@@ -66,11 +66,11 @@ nix develop --command just reference  # docs/commands.md and docs/errors.md from
   process argument or file. Safe path: only the pinned gh's `GH_TOKEN` and Git's credential pipe.
 - Every token handed out passes `authorizeUse` (Touch ID, an approved session, or for the reader the issue
   check) before `issueCredential`. Safe path: change `Access.swift` only with a test for each rule touched.
-- A handed-out token covers one repository, has permissions beyond `everydayPermissions` (`workflows` among
-  them) only if elevated at mint time, and is revoked after gh; a reader token covers none, is used only when
-  GitHub reports no permissions and no repositories, and never reaches Git. Safe path: `mintScopedToken`,
-  `repositoryPermissions` and `revokeAfterUse`; for the reader, `opensIssue` then `mintStoredReaderToken`; never
-  pass the sign-in out.
+- A handed-out token covers one repository, has a permission beyond `everydayPermissions` (`workflows` among
+  them) only if the repository is elevated for that permission at mint time, and is revoked after gh; a reader
+  token covers none, is used only when GitHub reports no permissions and no repositories, and never reaches Git.
+  Safe path: `mintScopedToken`, `repositoryPermissions` and `revokeAfterUse`; for the reader, `opensIssue` then
+  `mintStoredReaderToken`; never pass the sign-in out.
 - Secrets come only on stdin and leave only through gh's `GH_TOKEN` and Git's pipe: never a flag, an
   `--input` file, an `rpc`/`mcp` parameter or output. Safe path: mark the field `secret` in its `Schema`.
 - Only the pinned gh runs with a token, checked by SHA-256 and cdhash. Safe path: `gitHubCLI()`

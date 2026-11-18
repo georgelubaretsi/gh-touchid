@@ -116,8 +116,19 @@ func renderPrompts(into directory: String) throws -> Int32 {
             app: nil,
             login: "octocat"
         )),
-        ("elevate-one", .elevation(repositories: [widget], seconds: 30 * 60, by: agent)),
-        ("elevate-two", .elevation(repositories: [widget, "acme/gadget"], seconds: 90 * 60, by: agent)),
+        ("elevate-one", .elevation(repositories: [widget], permissions: ["workflows"], seconds: 30 * 60, by: agent)),
+        ("elevate-two", .elevation(
+            repositories: [widget, "acme/gadget"],
+            permissions: ["workflows"],
+            seconds: 90 * 60,
+            by: agent
+        )),
+        ("elevate-permissions", .elevation(
+            repositories: [widget],
+            permissions: ["environments", "secrets"],
+            seconds: 30 * 60,
+            by: agent
+        )),
         ("account", .acting(
             as: "octocat",
             by: agent,

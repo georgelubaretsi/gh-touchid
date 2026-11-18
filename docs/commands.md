@@ -29,7 +29,7 @@ an [error code](errors.md). The annotations are MCP's tool hints. See [Scripts a
 | [`gh-touchid git credential <get\|store\|erase>`](#git-credential) | Git's credential helper |
 | [`gh-touchid as <login> [--] <command> [arguments...]`](#as) | Run a command as one of your accounts |
 | [`gh-touchid session [--repo <repo>]... [--cwd <cwd>]`](#session) | Register the calling program as a session |
-| [`gh-touchid elevate --for <for> [--repo <repo>]... [--cwd <cwd>]`](#elevate) | Let tokens use all of the App's permissions for a while |
+| [`gh-touchid elevate --for <for> [--repo <repo>]... [--permission <permission>]... [--cwd <cwd>]`](#elevate) | Let tokens include more of the App's permissions for a while |
 | [`gh-touchid status`](#status) | What is stored and set up |
 | [`gh-touchid setup [<owners>...]`](#setup) | Set up what is missing |
 | [`gh-touchid lock`](#lock) | End every session approval and elevation |
@@ -381,7 +381,7 @@ gh-touchid gh <arguments...>
 names, for `gh repo view OWNER/REPO` and the like their argument, else GH_REPO, else the current repository's origin; a
 GraphQL query is not read, so if gh fails with a token taken that way, a notice names its repository and what to set
 instead. The token acts as you through the owner's App with only the permissions `app create` gives an App, without
-workflows, unless the repository is elevated; if gh fails with a token made without one the App has, a notice names it.
+workflows; `elevate` adds others for a while. If gh fails with a token made without one the App has, a notice names it.
 Outside a session, each use asks for Touch ID. With no repository, or for an owner without an App, it uses the public
 reader when one is stored (no Touch ID, public data only), and otherwise refuses before asking. Everything after `gh`
 goes to GitHub CLI: `gh-touchid gh --help` is its help. With --json, its output is captured.
@@ -540,28 +540,31 @@ Annotations: read-only no · destructive no · idempotent no · open-world no.
 ## elevate
 
 ```sh
-gh-touchid elevate --for <for> [--repo <repo>]... [--cwd <cwd>]
+gh-touchid elevate --for <for> [--repo <repo>]... [--permission <permission>]... [--cwd <cwd>]
 ```
 
-`elevate` lets tokens for the repositories (without --repo, the current one) use all of the owner's App's permissions
-for a while: workflows, and any the App has beyond what `app create` gives it, such as environments or secrets. 30m, 8h,
-1h30m, at most 1d. It asks for Touch ID.
+`elevate` lets tokens for the repositories (without --repo, the current one) include more of the owner's App's
+permissions for a while: workflows, or the ones named with --permission, such as environments or secrets. Tokens get a
+permission beyond what `app create` gives an App only this way. --for takes 30m, 8h, 1h30m, at most 1d. It asks for
+Touch ID, naming the permissions.
 
 Example:
 
 ```sh
-gh-touchid elevate --for 30m --repo acme/widgets
+gh-touchid elevate --for 30m --repo acme/widgets --permission environments
 ```
 
 | Input | Type | Required | Description |
 | --- | --- | --- | --- |
 | `cwd` | string | no | The folder to run in; by default the current one. |
 | `for` | string | yes | How long: 30m, 8h, 1h30m, 1d. |
+| `permissions` | array of string | no | The App's permissions to add; without them, workflows. |
 | `repos` | array of string | no | Repositories; without them, those of the working folder. |
 
 | Output | Type | Description |
 | --- | --- | --- |
 | `notices` | array of string | What gh-touchid tells the caller besides the result, in order: that the reader is in use and must not create or change anything, a token it could not revoke, which repository a failed gh had its token for, a warning. Present only when there is any. |
+| `permissions` | array of string | The permissions they are elevated for. |
 | `repositories` | array of string | The elevated repositories. |
 | `until` | string | When the elevation ends, ISO 8601. |
 
@@ -673,6 +676,10 @@ Input: none.
             "null"
           ]
         },
+        "permission": {
+          "description": "The GitHub permission tokens for the repository include.",
+          "type": "string"
+        },
         "repository": {
           "type": "string"
         },
@@ -683,6 +690,7 @@ Input: none.
       },
       "required": [
         "repository",
+        "permission",
         "until",
         "holder"
       ],

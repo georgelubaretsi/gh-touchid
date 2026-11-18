@@ -27,12 +27,15 @@ let sharesAgentSocket: Bool = {
 
 /// The agent protocol this build speaks; every request and reply carries it with `toolVersion`. Protocol 2 changed
 /// what `register` registers: the session's program is also looked for past `gh-touchid-adapter`, so that a session
-/// started through `gh-touchid rpc|mcp` belongs to the client that started the adapter.
-let agentProtocol = 2
+/// started through `gh-touchid rpc|mcp` belongs to the client that started the adapter. Protocol 3 changed what an
+/// elevation is: one per repository and GitHub permission (`permissions` in `elevate`, `check` and `status`), where
+/// the earlier protocols' elevation of a repository is for `workflows`.
+let agentProtocol = 3
 
-/// The protocols this build's agent answers, each as it means (1: `register` looks past shells only); its client
-/// falls back to the protocol of an earlier release's agent that refuses `agentProtocol`.
-let agentProtocols: Set<Int> = [1, 2]
+/// The protocols this build's agent answers, each as it means (1: `register` looks past shells only; 1 and 2: an
+/// elevation is for `workflows`); its client falls back to the protocol of an earlier release's agent that refuses
+/// `agentProtocol`.
+let agentProtocols: Set<Int> = [1, 2, 3]
 
 @_silgen_name("csops")
 func csops(_ pid: pid_t, _ operation: UInt32, _ buffer: UnsafeMutableRawPointer?, _ size: Int) -> Int32

@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { binary, builds, olderVersion, type Running, TestEnv } from "./support/harness";
+import { defaultAppPermissions } from "./support/mock-github";
 
 const fakeAgent = join(import.meta.dir, "support", "fake-agent.ts");
 const use = ["gh", "-R", "acme/widgets", "issue", "list"];
@@ -282,29 +283,116 @@ describe("agents starting and stopping", () => {
     expect(second.exited).toBe(false);
   });
 
-  test("a request in a protocol the agent does not answer, or none, is refused naming protocol 2 and acts on nothing",
+  test("a request in a protocol the agent does not answer, or none, is refused naming protocol 3 and acts on nothing",
     async () => {
       await using env = await TestEnv.create();
       const agent = await startAgent(env);
       const register = { op: "register", repos: ["acme/widgets"], folder: env.workDir };
       for (const request of [
         register,
-        { ...register, protocol: 3, version: "99.0.0" },
+        { ...register, protocol: 4, version: "99.0.0" },
         { op: "lock" },
-        { op: "lock", protocol: 3 },
+        { op: "lock", protocol: 4 },
       ]) {
-        expect(await env.agentRequest(request)).toMatchObject({ error: "protocol", protocol: 2 });
+        expect(await env.agentRequest(request)).toMatchObject({ error: "protocol", protocol: 3 });
       }
       expect(agent.exited).toBe(false);
-      expect(env.accessLog().some((line) => /refused register to .*: not protocol 1 or 2/.test(line))).toBe(true);
-      // protocols 1 (earlier releases) and 2 are answered, each in a reply of its own protocol
-      for (const spoken of [1, 2]) {
+      const refusal = /refused register to .*: not protocol 1 or 2 or 3/;
+      expect(env.accessLog().some((line) => refusal.test(line))).toBe(true);
+      // protocols 1 and 2 (earlier releases) and 3 are answered, each in a reply of its own protocol
+      for (const spoken of [1, 2, 3]) {
         expect(await env.agentRequest({ op: "status", protocol: spoken })).toMatchObject({
           sessions: [],
           elevations: [],
           protocol: spoken,
         });
       }
+    });
+});
+
+describe("agent protocol 2, which 0.7.0 speaks", () => {
+  /** acme's App with `environments` besides the default permissions, installed on acme/widgets and acme/gadgets. */
+  function seedAcmeWithEnvironments(env: TestEnv) {
+    return env.seedOwner({
+      owner: "acme",
+      login: "alice",
+      repositories: ["widgets", "gadgets"],
+      permissions: { ...defaultAppPermissions, environments: "write" },
+    });
+  }
+
+  test("an agent of 0.7.0 elevates a later gh-touchid for workflows, which refuses other permissions before asking",
+    async () => {
+      await using env = await TestEnv.create();
+      seedAcmeWithEnvironments(env);
+      // 0.7.0's agent, started by 0.7.0 with a requirement the later build (stating 9.0.0) meets: it takes that build
+      // for a later release, as it would take a signed one
+      const protocol2 = {
+        binary: builds.protocol2,
+        env: { GH_TOUCHID_TEST_PEER_REQUIREMENT: requirementFor(builds.later) },
+      };
+      expect((await env.run(["session", "--repo", "acme/widgets"], protocol2)).status).toBe(0);
+      const approved = await env.run(use, protocol2);
+      expect(approved.status).toBe(0);
+      expect(approved.auth).toHaveLength(1);
+      // the agent at agent.sock is 0.7.0's: it refuses protocol 3
+      expect(await env.agentRequest({ op: "status", protocol: 3 })).toMatchObject({ error: "protocol", protocol: 2 });
+
+      const later = { binary: builds.later };
+      const elevated = await env.run(["elevate", "--for", "1h", "--repo", "acme/widgets"], later);
+      expect(elevated.status).toBe(0);
+      expect(elevated.auth).toHaveLength(1);
+      expect(elevated.auth[0]).toContain("workflows");
+      // this build reads the elevation 0.7.0's agent holds as one for workflows
+      const result = await env.run(use);
+      expect(result.status).toBe(0);
+      expect(result.auth).toEqual([]);
+      const permissions = env.mock.scopedTokens().at(-1)?.permissions;
+      expect(permissions?.workflows).toBe("write");
+      expect(permissions?.environments).toBeUndefined();
+      expect(env.accessLog().join("\n")).toMatch(
+        /granted acme\/widgets \(session bun\[\d+\]\), elevated for workflows as alice/,
+      );
+
+      const environments = ["elevate", "--for", "1h", "--repo", "acme/widgets", "--permission", "environments"];
+      for (const client of [later, {}]) {
+        const refused = await env.run(environments, client);
+        expect(refused.status).toBe(1);
+        expect(refused.auth).toEqual([]);
+        expect(refused.stderr).toContain("elevates for workflows only");
+      }
+
+      const status = await env.run(["status"]);
+      expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}workflows until /m);
+      expect(status.stdout).not.toContain("environments");
+    });
+
+  test("0.7.0 meets an agent of this build: its tokens include workflows only while elevated for workflows",
+    async () => {
+      await using env = await TestEnv.create();
+      seedAcmeWithEnvironments(env);
+      // the agent is this build's (stating 9.0.0), which 0.7.0 takes for a later release meeting its requirement
+      await approvedSession(env, builds.later);
+      const protocol2 = {
+        binary: builds.protocol2,
+        env: { GH_TOUCHID_TEST_PEER_REQUIREMENT: requirementFor(builds.later) },
+      };
+      const later = { binary: builds.later };
+
+      const environments = ["elevate", "--for", "1h", "--repo", "acme/widgets", "--permission", "environments"];
+      expect((await env.run(environments, later)).status).toBe(0);
+      const before = await env.run(use, protocol2);
+      expect(before.status).toBe(0);
+      expect(before.auth).toEqual([]);
+      expect(env.mock.scopedTokens().at(-1)?.permissions.workflows).toBeUndefined();
+      expect((await env.run(["status"], protocol2)).stdout).not.toMatch(/^ {2}acme\/widgets +until /m);
+
+      expect((await env.run(["elevate", "--for", "1h", "--repo", "acme/widgets"], later)).status).toBe(0);
+      const after = await env.run(use, protocol2);
+      expect(after.status).toBe(0);
+      expect(after.auth).toEqual([]);
+      expect(env.mock.scopedTokens().at(-1)?.permissions.workflows).toBe("write");
+      expect((await env.run(["status"], protocol2)).stdout).toMatch(/^ {2}acme\/widgets +until /m);
     });
 });
 
@@ -393,7 +481,7 @@ describe("an agent of 0.4.1", () => {
     expect(env.accessLog().join("\n")).toMatch(grant);
     const status = await env.run(["status"]);
     expect(status.stdout).toMatch(/^ {2}pending +bun\[\d+\].*: acme\/gadgets$/m);
-    expect(status.stdout).toMatch(/^ {2}acme\/widgets +until .* \(gh-touchid 0\.4\.1\)$/m);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}workflows until .* \(gh-touchid 0\.4\.1\)$/m);
   });
 
   test("elevated a repository: tokens include workflows even when a session here decides", async () => {

@@ -4,20 +4,24 @@
 #
 #   scripts/test-builds.sh [--xcode PATH]
 #
-#   build/test/gh-touchid           the test build; its list of earlier releases has older/, previous/ and legacy/
+#   build/test/gh-touchid           the test build; its list of earlier releases has older/, previous/, protocol2/ and
+#                                   legacy/
 #   build/test/gh-touchid-adapter   gh-touchid-adapter, which the tests of rpc and mcp name in GH_TOUCHID_ADAPTER
 #   build/test/older/gh-touchid     the same sources stating version 0.1.0
 #   build/test/revoking/gh-touchid  the test build with older/ revoked on its list
-#   build/test/later/gh-touchid     the same sources stating version 9.0.0: a later release to 0.4.2
+#   build/test/later/gh-touchid     the same sources stating version 9.0.0, with the test build's list: a later
+#                                   release to 0.4.2 and 0.7.0, which trusts their agents as a real later release would
 #   build/test/previous/gh-touchid  gh-touchid 0.4.2 (git archive v0.4.2), the last release of agent protocol 1, as a
+#                                   test build, built again only when the tag moves
+#   build/test/protocol2/gh-touchid gh-touchid 0.7.0 (git archive v0.7.0), the last release of agent protocol 2, as a
 #                                   test build, built again only when the tag moves
 #   build/test/legacy/gh-touchid    gh-touchid 0.4.1 (git archive v0.4.1, which needs the tag) as a test build, built
 #                                   again only when the tag moves
 #   build/test/pinned-gh            a link to GitHub's gh as release/gh.json pins it (scripts/pinned-gh.sh path): the
 #                                   tests use it as the judge of what gh does with a command line
 #
-# The lists pin both architectures of older/ and previous/, and only arm64 of legacy/: 0.4.1's build.sh left its
-# x86_64 slice unsigned, so the tests of 0.4.1 need Apple silicon.
+# The lists pin both architectures of older/, previous/ and protocol2/, and only arm64 of legacy/: 0.4.1's build.sh
+# left its x86_64 slice unsigned, so the tests of 0.4.1 need Apple silicon.
 set -euo pipefail
 
 fail() {
@@ -37,12 +41,16 @@ legacy_tag=v0.4.1
 legacy_version=0.4.1
 previous_tag=v0.4.2
 previous_version=0.4.2
+protocol2_tag=v0.7.0
+protocol2_version=0.7.0
 older_version=0.1.0
 later_version=9.0.0
 legacy_commit="$(git -C "$root" rev-parse --verify --quiet "$legacy_tag^{commit}")" ||
   fail "needs the tag $legacy_tag in this clone"
 previous_commit="$(git -C "$root" rev-parse --verify --quiet "$previous_tag^{commit}")" ||
   fail "needs the tag $previous_tag in this clone"
+protocol2_commit="$(git -C "$root" rev-parse --verify --quiet "$protocol2_tag^{commit}")" ||
+  fail "needs the tag $protocol2_tag in this clone"
 mkdir -p "$out"
 pinned_gh="$("$root/scripts/pinned-gh.sh" path)"
 ln -sfn "$pinned_gh" "$out/pinned-gh"
@@ -87,15 +95,18 @@ build_tagged legacy "$legacy_commit" &
 legacy_job=$!
 build_tagged previous "$previous_commit" &
 previous_job=$!
+build_tagged protocol2 "$protocol2_commit" &
+protocol2_job=$!
 build --output "$out/older/gh-touchid" --testing-version "$older_version" --no-adapter &
 older_job=$!
-wait_all "$legacy_job" "$previous_job" "$older_job"
+wait_all "$legacy_job" "$previous_job" "$protocol2_job" "$older_job"
 
 older="arm64=$(cdhash "$out/older/gh-touchid" arm64) x86_64=$(cdhash "$out/older/gh-touchid" x86_64)"
 previous="arm64=$(cdhash "$out/previous/gh-touchid" arm64) x86_64=$(cdhash "$out/previous/gh-touchid" x86_64)"
+protocol2="arm64=$(cdhash "$out/protocol2/gh-touchid" arm64) x86_64=$(cdhash "$out/protocol2/gh-touchid" x86_64)"
 legacy="arm64=$(cdhash "$out/legacy/gh-touchid" arm64)"
-printf '%s trusted %s\n%s trusted %s\n%s trusted %s\n' "$older_version" "$older" "$previous_version" "$previous" \
-  "$legacy_version" "$legacy" > "$out/known-releases"
+printf '%s trusted %s\n%s trusted %s\n%s trusted %s\n%s trusted %s\n' "$older_version" "$older" \
+  "$previous_version" "$previous" "$protocol2_version" "$protocol2" "$legacy_version" "$legacy" > "$out/known-releases"
 printf '%s revoked %s\n' "$older_version" "$older" > "$out/known-releases-revoking"
 
 # Only the test build has an adapter: SwiftPM builds one at a time in .build/, and one is all the tests need.
@@ -103,6 +114,7 @@ build --output "$out/gh-touchid" --known-releases "$out/known-releases" &
 main_job=$!
 build --output "$out/revoking/gh-touchid" --known-releases "$out/known-releases-revoking" --no-adapter &
 revoking_job=$!
-build --output "$out/later/gh-touchid" --testing-version "$later_version" --no-adapter &
+build --output "$out/later/gh-touchid" --testing-version "$later_version" --known-releases "$out/known-releases" \
+  --no-adapter &
 later_job=$!
 wait_all "$main_job" "$revoking_job" "$later_job"

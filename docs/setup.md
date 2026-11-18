@@ -22,7 +22,9 @@ named `acme-touchid` unless `--name` says otherwise. It has no webhook, the call
 | Checks, Commit statuses, Metadata                   | Read-only      |
 
 Tokens get these permissions, without Workflows. Workflows, and any permission you give the App later, reach a token
-only while its repository is [elevated](sessions.md#elevating-a-repository).
+only while its repository is [elevated](sessions.md#elevating-a-repository) for it: `elevate` alone adds Workflows,
+and `elevate --permission NAME` adds another. For example, to let an agent set an environment's secrets or variables,
+add Environments (read and write) to the App and run `gh-touchid elevate --for 30m --permission environments`.
 
 The browser then goes through three pages on GitHub:
 

@@ -6,8 +6,8 @@ import Foundation
 // peer, never from the message), named by pid and start time. A pending session is approved with Touch ID by the
 // first client inside it that needs a token; after that, every process inside it gets tokens for its repositories
 // (and issue-only tokens for others) without Touch ID until it exits. Clients mint the tokens themselves; the daemon
-// only answers which session decides a caller's request and whether a repository is elevated. Sessions nest: an
-// inner session never shadows an outer one that lists the repository asked for.
+// only answers which session decides a caller's request and which permissions a repository is elevated for. Sessions
+// nest: an inner session never shadows an outer one that lists the repository asked for.
 //
 // Every request and reply carries the protocol and the sender's version. The agent answers each protocol in
 // `agentProtocols` as it means, in a reply of that protocol; a request in another, or none, is refused (naming
@@ -49,7 +49,8 @@ private struct Session {
 
 private final class SessionAgent: @unchecked Sendable {
     private var sessions: [pid_t: Session] = [:]
-    private var elevations: [String: Date] = [:]
+    /// Repository → GitHub permission → when its elevation ends.
+    private var elevations: [String: [String: Date]] = [:]
     private var sources: [DispatchSourceProtocol] = []
     private let listener: Int32
     /// The socket this agent bound, which it removes as it stops only while it is still the one at its path.
@@ -116,9 +117,9 @@ private final class SessionAgent: @unchecked Sendable {
         case "register":
             answer = register(request, peer: peer, who: who, protocol: spoken)
         case "check":
-            answer = check(request, peer: peer)
+            answer = check(request, peer: peer, protocol: spoken)
         case "status":
-            answer = status()
+            answer = status(protocol: spoken)
         case "lock":
             reply(client, ["ok": true], protocol: spoken)
             finish("locked by \(who)")
@@ -137,7 +138,7 @@ private final class SessionAgent: @unchecked Sendable {
             case "deny":
                 answer = deny(request, peer: peer)
             default:
-                answer = elevate(request, who: who)
+                answer = elevate(request, who: who, protocol: spoken)
             }
         default:
             answer = ["error": "unknown request"]
@@ -184,10 +185,15 @@ private final class SessionAgent: @unchecked Sendable {
 
     /// `check {repo}`: the session that decides the caller's request for `repo`; `check {session}`: that session, while
     /// it is live and at or above the caller (how a client waits for another one's approval dialog). `covers` says
-    /// whether the session lists `repo`.
-    private func check(_ request: [String: Any], peer: pid_t) -> [String: Any] {
+    /// whether the session lists `repo`; `elevated`, whether `repo` is elevated for `workflows`, and in protocol 3
+    /// `permissions` every permission it is elevated for.
+    private func check(_ request: [String: Any], peer: pid_t, protocol spoken: Int) -> [String: Any] {
         let repository = (request["repo"] as? String).flatMap(validRepository)?.lowercased()
-        var reply: [String: Any] = ["elevated": repository.map(isElevated) ?? false]
+        let permissions = repository.map(elevatedPermissions) ?? []
+        var reply: [String: Any] = ["elevated": permissions.contains("workflows")]
+        if spoken >= 3 {
+            reply["permissions"] = permissions
+        }
         let session = request["session"] != nil
             ? sessionAbove(peer, id: request["session"])
             : deciding(repository, for: peer)
@@ -238,28 +244,43 @@ private final class SessionAgent: @unchecked Sendable {
         return ["ok": true]
     }
 
-    private func elevate(_ request: [String: Any], who: String) -> [String: Any] {
+    /// `elevate {repos, seconds}`, and in protocol 3 `permissions`; earlier protocols elevate for `workflows`.
+    private func elevate(_ request: [String: Any], who: String, protocol spoken: Int) -> [String: Any] {
         let repositories = normalizedRepositories(request["repos"])
-        guard !repositories.isEmpty,
+        let permissions = spoken >= 3 ? normalizedPermissions(request["permissions"]) : defaultElevation
+        guard !repositories.isEmpty, !permissions.isEmpty,
               let seconds = request["seconds"] as? Double, seconds > 0, seconds <= longestElevation else {
-            return ["error": "elevate needs repositories and at most 1d"]
+            return ["error": "elevate needs repositories, permissions and at most 1d"]
         }
         let until = Date().addingTimeInterval(seconds)
         for repository in repositories {
-            elevations[repository] = until
-            appendAccessLog("elevated \(repository) until \(localTime(until)) by \(who)")
+            for permission in permissions {
+                elevations[repository, default: [:]][permission] = until
+            }
+            appendAccessLog(
+                "elevated \(repository) for \(permissions.joined(separator: ", ")) until \(localTime(until)) by \(who)"
+            )
         }
         return ["ok": true]
     }
 
-    private func status() -> [String: Any] {
+    /// Sessions and elevations; in protocols 1 and 2, only elevations for `workflows`, without naming it.
+    private func status(protocol spoken: Int) -> [String: Any] {
         let now = Date()
         dropEnded(now: now)
+        var listed: [[String: Any]] = []
+        for (repository, permissions) in elevations.sorted(by: { $0.key < $1.key }) {
+            for (permission, until) in permissions.sorted(by: { $0.key < $1.key }) {
+                if spoken >= 3 {
+                    listed.append(["repo": repository, "permission": permission, "until": until.timeIntervalSince1970])
+                } else if permission == "workflows" {
+                    listed.append(["repo": repository, "until": until.timeIntervalSince1970])
+                }
+            }
+        }
         return [
             "sessions": sessions.values.sorted { $0.pid < $1.pid }.map { $0.message(now: now) },
-            "elevations": elevations.sorted { $0.key < $1.key }.map { repository, until -> [String: Any] in
-                ["repo": repository, "until": until.timeIntervalSince1970]
-            },
+            "elevations": listed,
         ]
     }
 
@@ -287,8 +308,10 @@ private final class SessionAgent: @unchecked Sendable {
         return session
     }
 
-    private func isElevated(_ repository: String) -> Bool {
-        (elevations[repository] ?? .distantPast) > Date()
+    /// The permissions `repository` is elevated for now, sorted.
+    private func elevatedPermissions(_ repository: String) -> [String] {
+        let now = Date()
+        return (elevations[repository] ?? [:]).filter { $0.value > now }.keys.sorted()
     }
 
     private func tick() {
@@ -306,9 +329,14 @@ private final class SessionAgent: @unchecked Sendable {
             sessions.removeValue(forKey: pid)
             appendAccessLog("session ended: \(session.label) (\(session.repositories.joined(separator: ", ")))")
         }
-        for (repository, until) in elevations where until <= now {
-            elevations.removeValue(forKey: repository)
-            appendAccessLog("elevation expired: \(repository)")
+        for (repository, permissions) in elevations {
+            for (permission, until) in permissions where until <= now {
+                elevations[repository]?.removeValue(forKey: permission)
+                appendAccessLog("elevation expired: \(repository) for \(permission)")
+            }
+            if elevations[repository]?.isEmpty == true {
+                elevations.removeValue(forKey: repository)
+            }
         }
     }
 
@@ -329,6 +357,11 @@ private final class SessionAgent: @unchecked Sendable {
 private func normalizedRepositories(_ value: Any?) -> [String] {
     let names = (value as? [String] ?? []).compactMap(validRepository).map { $0.lowercased() }
     return Array(Set(names)).sorted()
+}
+
+/// Valid GitHub permission names, unique and sorted.
+private func normalizedPermissions(_ value: Any?) -> [String] {
+    Array(Set((value as? [String] ?? []).compactMap(validPermission))).sorted()
 }
 
 /// The folder a session reports for itself, when it is an existing directory; it is shown in dialogs.

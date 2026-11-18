@@ -3,8 +3,12 @@
 ## From 0.7.0
 
 - If an owner's App has permissions beyond those `app create` gives it (Environments, Secrets, Administration, or
-  Checks or Commit statuses at write, for example), tokens now get them only while the repository is
-  [elevated](sessions.md#elevating-a-repository). An App made with `app create` and left as it was is not affected.
+  Checks or Commit statuses at write, for example), tokens now get one only while the repository is
+  [elevated](sessions.md#elevating-a-repository) for it: `gh-touchid elevate --for 30m --permission environments`.
+  `elevate` alone still adds `workflows`. An App made with `app create` and left as it was is not affected.
+- An earlier release's background agent, still running after the upgrade, elevates for `workflows` only, so
+  `elevate --permission` with another permission is refused until it exits or `gh-touchid lock` ends it. Elevations
+  made through 0.7.0 count for `workflows` only.
 
 ## From 0.4.2
 

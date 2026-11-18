@@ -221,17 +221,44 @@ describe("elevation", () => {
       withoutWorkflows(installation.permissions),
       withoutWorkflows(installation.permissions),
     ]);
-    expect(env.accessLog().filter((line) => line.includes("granted acme/widgets (once), elevated as alice"))).toHaveLength(1);
+    expect(env.accessLog().filter((line) => line.includes("granted acme/widgets (once), elevated for workflows as alice")))
+      .toHaveLength(1);
   });
 
-  test("unelevated, a token gets the everyday permissions at most at their levels; elevated, all of them", async () => {
+  test("without elevation a token gets the everyday permissions at most at their levels; elevation adds the ones it names", async () => {
     await using env = await TestEnv.create();
-    const { installation } = env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
-    expect((await env.run(["gh", "-R", "acme/widgets", "issue", "list"])).status).toBe(0);
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
+    const use = ["gh", "-R", "acme/widgets", "issue", "list"];
+    expect((await env.run(use)).status).toBe(0);
     expect((await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets"])).status).toBe(0);
-    expect((await env.run(["gh", "-R", "acme/widgets", "issue", "list"])).status).toBe(0);
+    expect((await env.run(use)).status).toBe(0);
+    const named = await env.run([
+      "elevate", "--for", "30m", "--repo", "acme/widgets", "--permission", "environments", "--permission", "statuses",
+    ]);
+    expect(named.status).toBe(0);
+    expect(named.auth).toEqual(["let tokens for acme/widgets include environments and statuses for 30 minutes"]);
+    expect((await env.run(use)).status).toBe(0);
 
-    expect(env.mock.scopedTokens().map((token) => token.permissions)).toEqual([broadEveryday, installation.permissions]);
+    expect(env.mock.scopedTokens().map((token) => token.permissions)).toEqual([
+      broadEveryday,
+      { ...broadEveryday, workflows: "write" },
+      { ...broadEveryday, workflows: "write", environments: "write", statuses: "write" },
+    ]);
+    expect(env.accessLog().join("\n")).toContain(
+      "granted acme/widgets (once), elevated for environments, statuses, workflows as alice",
+    );
+    const status = await env.run(["status"]);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}environments until /m);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}statuses until /m);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}workflows until /m);
+  });
+
+  test("a permission name GitHub could not have is refused before asking", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const result = await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets", "--permission", "Environments"]);
+    expect(result.status).toBe(2);
+    expect(result.auth).toEqual([]);
   });
 
   test("when gh fails, a notice names what the token was made without, other than workflows", async () => {
@@ -241,14 +268,17 @@ describe("elevation", () => {
     expect(failed.status).toBe(1);
     expect(failed.stderr).toContain(
       "gh failed with a token for acme/widgets made without added_later (write), administration (write), checks "
-        + "(write), environments (write), secrets (read) and statuses (write), which the acme App has; tokens include "
-        + "them while the repository is elevated: gh-touchid elevate --for 30m --repo acme/widgets",
+        + "(write), environments (write), secrets (read) and statuses (write), which the acme App has; a token "
+        + "includes one while the repository is elevated for it: gh-touchid elevate --for 30m --repo acme/widgets "
+        + "--permission NAME",
     );
 
     const succeeded = await env.run(["gh", "-R", "acme/widgets", "pr", "list"]);
     expect(succeeded.status).toBe(0);
     expect(succeeded.stderr).not.toContain("made without");
-    expect((await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets"])).status).toBe(0);
+    const names = ["added_later", "administration", "checks", "environments", "secrets", "statuses"];
+    const elevate = ["elevate", "--for", "30m", "--repo", "acme/widgets", ...names.flatMap((name) => ["--permission", name])];
+    expect((await env.run(elevate)).status).toBe(0);
     const elevated = await env.run(["gh", "-R", "acme/widgets", "pr", "list"], { env: { FAKE_GH_EXIT: "1" } });
     expect(elevated.status).toBe(1);
     expect(elevated.stderr).not.toContain("made without");
@@ -595,15 +625,19 @@ describe("Git", () => {
     expect(env.mock.revocations).toEqual([]);
   });
 
-  test("Git's token gets the everyday permissions too, and all of them once the repository is elevated", async () => {
+  test("Git's token gets the everyday permissions too, and a permission the repository is elevated for", async () => {
     await using env = await TestEnv.create();
     const { git } = await configureGit(env);
-    const { installation } = env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
     expect((await env.exec([git, "ls-remote", `${env.mock.url}/acme/widgets.git`])).status).toBe(0);
-    expect((await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets"])).status).toBe(0);
+    const elevate = ["elevate", "--for", "30m", "--repo", "acme/widgets", "--permission", "environments"];
+    expect((await env.run(elevate)).status).toBe(0);
     expect((await env.exec([git, "ls-remote", `${env.mock.url}/acme/widgets.git`])).status).toBe(0);
 
-    expect(env.mock.scopedTokens().map((token) => token.permissions)).toEqual([broadEveryday, installation.permissions]);
+    expect(env.mock.scopedTokens().map((token) => token.permissions)).toEqual([
+      broadEveryday,
+      { ...broadEveryday, environments: "write" },
+    ]);
   });
 
   test("inside a session, Git gets an issue-only token for a private repository it does not list", async () => {

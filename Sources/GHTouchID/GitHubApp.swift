@@ -19,10 +19,10 @@ struct ScopedToken {
     let heldBack: [String: String]
 }
 
-/// The permissions a token for a repository that is not elevated may have, each at most at this level: those `app
+/// The permissions a token for a repository may have without elevation, each at most at this level: those `app
 /// create` gives an App, without `workflows`. Anything else an installation has reaches a token only while the
-/// repository is elevated: `workflows`, a higher level of one of these, and every permission an owner added to the App
-/// (environments, secrets, administration and the like) or GitHub introduces later.
+/// repository is elevated for it: `workflows`, a higher level of one of these, and every permission an owner added to
+/// the App (environments, secrets, administration and the like) or GitHub introduces later.
 let everydayPermissions = [
     "actions": "write",
     "contents": "write",
@@ -33,10 +33,24 @@ let everydayPermissions = [
     "metadata": "read",
 ]
 
-/// What a token may do: the installation's everyday permissions, or all of the installation's while the repository is
-/// elevated; or just open issues and read the repository.
+/// What an elevation is for when it names no permission: `workflows`, as every elevation was before agent protocol 3.
+let defaultElevation = ["workflows"]
+
+/// A GitHub permission's name as GitHub writes it (`pull_requests`): a lowercase letter, then lowercase letters,
+/// digits and underscores, at most 64 in all; or nil.
+func validPermission(_ name: String) -> String? {
+    guard let first = name.unicodeScalars.first, ("a" ... "z").contains(first), name.unicodeScalars.count <= 64,
+          name.unicodeScalars.allSatisfy({ ("a" ... "z").contains($0) || ("0" ... "9").contains($0) || $0 == "_" })
+    else {
+        return nil
+    }
+    return name
+}
+
+/// What a token may do: the installation's everyday permissions, and those of its other permissions the repository is
+/// elevated for; or just open issues and read the repository.
 enum TokenScope {
-    case repository(elevated: Bool)
+    case repository(elevated: Set<String>)
     case issues
 
     static let issuePermissions = ["issues": "write", "metadata": "read", "contents": "read"]
@@ -45,16 +59,17 @@ enum TokenScope {
 private let permissionLevels = ["read": 1, "write": 2, "admin": 3]
 
 /// The permissions to ask for in a token for one repository, and those of the installation it goes without (with the
-/// installation's level): all of them while the repository is elevated; otherwise each everyday permission the
-/// installation has, at the lower of the two levels. A level gh-touchid does not know is held back.
+/// installation's level): each permission the repository is elevated for, at the installation's level; each other
+/// everyday permission the installation has, at the lower of the two levels. A level gh-touchid does not know is held
+/// back unless elevated.
 func repositoryPermissions(
     installation: [String: Any],
-    elevated: Bool
+    elevated: Set<String>
 ) -> (granted: [String: String], heldBack: [String: String]) {
     var granted: [String: String] = [:]
     var heldBack: [String: String] = [:]
     for case let (name, level as String) in installation {
-        if elevated {
+        if elevated.contains(name) {
             granted[name] = level
         } else if let ceiling = everydayPermissions[name], let have = permissionLevels[level],
                   let most = permissionLevels[ceiling] {
@@ -71,7 +86,7 @@ func repositoryPermissions(
 
 /// What to tell the caller when gh fails with a token made without some of its installation's permissions, other than
 /// `workflows`, which GitHub names in its refusals; for the others it says only "Resource not accessible by
-/// integration".
+/// integration". It names no permission to elevate for: gh-touchid cannot tell which one gh needed.
 func heldBackNotice(_ heldBack: [String: String], repository: String) -> String? {
     let named = heldBack.filter { $0.key != "workflows" }.sorted { $0.key < $1.key }.map { "\($0.key) (\($0.value))" }
     guard let last = named.last else {
@@ -79,7 +94,8 @@ func heldBackNotice(_ heldBack: [String: String], repository: String) -> String?
     }
     let list = named.count == 1 ? last : named.dropLast().joined(separator: ", ") + " and " + last
     return "gh failed with a token for \(repository) made without \(list), which the \(ownerAccount(repository)) App "
-        + "has; tokens include them while the repository is elevated: gh-touchid elevate --for 30m --repo \(repository)"
+        + "has; a token includes one while the repository is elevated for it: gh-touchid elevate --for 30m --repo "
+        + "\(repository) --permission NAME"
 }
 
 /// A sign-in is renewed once it has less than this left, so that every token narrowed from it lasts at least this long.

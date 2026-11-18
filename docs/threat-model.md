@@ -13,7 +13,7 @@ from the user's side; Sources/GHTouchID/Access.swift has the policy itself.
 | Your sign-in to each owner's App: an access token (8 h) and a refresh token (6 months) | Keychain, `com.lubaretsi.gh-touchid.signin` | Together with the client secret it reaches every repository the App is installed on, with all its permissions, as far as your own access goes |
 | Each App's client secret | Keychain, `com.lubaretsi.gh-touchid.app` | Narrows, renews and revokes tokens of your sign-in |
 | Your accounts' tokens (`account add`) | Keychain, `com.lubaretsi.gh-touchid.user` | As broad and long-lived as you made them on GitHub |
-| Narrowed tokens, one per use | memory of gh-touchid, the env of the gh it starts, Git's credential pipe | One repository; only the everyday permissions (`app create`'s, without `workflows`) unless elevated; revoked after gh, Git's run out (at most 8 h) |
+| Narrowed tokens, one per use | memory of gh-touchid, the env of the gh it starts, Git's credential pipe | One repository; only the everyday permissions (`app create`'s, without `workflows`) plus those the repository is elevated for; revoked after gh, Git's run out (at most 8 h) |
 | The reader's private key (`reader create`, `reader add`) | Keychain, `com.lubaretsi.gh-touchid.reader` | Mints tokens of the reader App's bot until the key is deleted on GitHub; it never expires |
 | Reader tokens, one per use | memory of gh-touchid, the env of the gh it starts | No permissions and no repositories: public data only, plus opening issues on public repositories; revoked after gh; they act as the reader's bot, not as you |
 | Session approvals and elevations | memory of the background agent | Let a program and its descendants get tokens without Touch ID |
@@ -43,7 +43,7 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
 | --- | --- | --- |
 | Command-line arguments and environment (`GH_REPO`, `GH_TOUCHID_AS`) | any program running as the user | They choose the repository and command shown in the dialog. A gh command line is read as gh reads it, from gh's own list of commands and flags, so the dialog names the command gh runs; only gh's own commands run (no extensions, user aliases or hidden commands); those that could reveal or store the token (`auth` other than `auth status` without `-t`, `--show-token`, `alias`, `extension`) are refused wherever flags put their name; titles and bodies are shown in full |
 | Git's credential requests (`git credential get`) | Git | Answered only when the nearest non-shell ancestor is `git-remote-http(s)` and stdout is not a terminal |
-| The background agent's Unix socket | processes of the same user | Every request and reply carries the protocol and the version. The agent answers protocols 1 (earlier releases) and 2, each as it means (in 2, `register` also looks past `gh-touchid-adapter`), and refuses any other before anything is done; a client falls back once to protocol 1 for a trusted earlier release's agent. `register` (always the caller's own session root), `check`, `status` and `lock` for any same-user peer; `begin-approval`, `approve`, `deny` and `elevate` only for a trusted peer (boundary 3). Clients act only on replies of a trusted agent |
+| The background agent's Unix socket | processes of the same user | Every request and reply carries the protocol and the version. The agent answers protocols 1 (earlier releases), 2 and 3, each as it means (in 2 and 3, `register` also looks past `gh-touchid-adapter`; in 3, `elevate`, `check` and `status` carry permissions, and in 1 and 2 an elevation means `workflows` only), and refuses any other before anything is done; a client falls back to the protocol of a trusted earlier release's agent, and refuses an elevation for permissions other than `workflows` that such an agent cannot hold before the Touch ID window. `register` (always the caller's own session root), `check`, `status` and `lock` for any same-user peer; `begin-approval`, `approve`, `deny` and `elevate` only for a trusted peer (boundary 3). Clients act only on replies of a trusted agent |
 | The local server on `127.0.0.1:47911` (`app create`, `app add`, `app login`, `reader create`) | the browser, and any web page or local process | Only `GET`; a callback must carry this attempt's random `state`; the code exchange needs the PKCE verifier and the client secret (a manifest conversion needs the one-time code); the manifest page stops being served once an App was made |
 | `--input` JSON and command words | any program running as the user, directly or through the adapter | Checked against the operation's schema before anything is done: unknown keys, wrong types and input over 1 MiB are refused; secrets come only on stdin, never as arguments; text that becomes a program's argument or folder is refused with a NUL, at which a C string would end, and every program start refuses it again |
 | The adapter's stdio (`gh-touchid rpc`, `gh-touchid mcp`) | the client that started it (an agent harness) | The adapter holds no secrets and calls the core's CLI once per call; it refuses operations that take a secret, so a secret never passes through a model's parameters |
@@ -58,9 +58,10 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
    gh starts (editor, Git, the repository's hooks, extensions) inherit the token while gh runs.
 2. **gh-touchid → Git.** Git's transport gets the token over the credential-helper pipe. Git's tokens are not
    revoked; they run out with the sign-in's access token.
-3. **gh-touchid ↔ background agent.** The agent holds no tokens or secrets, only session and elevation state. Each
-   side identifies the other by the connection's audit token (`identifyPeer`): same user, a valid code signature, the
-   hardened runtime when it has it, then the kernel's cdhash of the peer. Trusted: this release's own cdhashes, an
+3. **gh-touchid ↔ background agent.** The agent holds no tokens or secrets, only session state and elevations, each
+   for one repository and one permission. Each side identifies the other by the connection's audit token
+   (`identifyPeer`): same user, a valid code signature, the hardened runtime when it has it, then the kernel's cdhash
+   of the peer. Trusted: this release's own cdhashes, an
    earlier release on the built-in list (`release/known-releases`, marked `trusted`), or a later release whose code
    meets `releaseCodeRequirement` (gh-touchid's Developer ID) and which states a later version. A release marked
    `revoked` is not trusted; the first client that meets its agent locks it and carries nothing over. The
@@ -85,10 +86,11 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
   argument or file.
 - Every handed-out token passes `authorizeUse` before `issueCredential` mints it: Touch ID, or an approved session
   that covers the use, or, for the reader, the issue check; acting as an account asks for Touch ID on every use.
-- A handed-out token covers exactly one repository. Unless the repository is elevated when the token is minted, it
-  has only the everyday permissions (`everydayPermissions`: what `app create` gives an App, without `workflows`) that
-  the installation has, each at most at that level; anything else, a permission GitHub adds later included, needs
-  elevation. Issue-only tokens never include `workflows`. A reader token covers no repository and is used only when
+- A handed-out token covers exactly one repository. It has the everyday permissions (`everydayPermissions`: what
+  `app create` gives an App, without `workflows`) that the installation has, each at most at that level, and any
+  other permission only if the repository is elevated for that permission when the token is minted; a permission
+  GitHub adds later is held back the same way. An elevation from an agent of protocol 1 or 2 counts for `workflows`
+  only. Issue-only tokens never include `workflows`. A reader token covers no repository and is used only when
   GitHub reports `permissions` `{}`, `repository_selection` `selected` and no repositories; it goes only to the pinned
   gh, never to Git.
 - The core links no third-party code. The adapter holds no secrets, never reads the Keychain or talks to the agent,

@@ -142,8 +142,8 @@ describe("elevate", () => {
 
     const status = await env.run(["status"]);
     expect(status.stdout).toMatch(/^Elevated/m);
-    expect(status.stdout).toMatch(/^ {2}acme\/gadgets +until /m);
-    expect(status.stdout).toMatch(/^ {2}acme\/widgets +until /m);
+    expect(status.stdout).toMatch(/^ {2}acme\/gadgets +workflows until /m);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets +workflows until /m);
 
     await env.run(["lock"]);
     expect((await env.run(["status"])).stdout).toContain("No sessions or elevations.");
