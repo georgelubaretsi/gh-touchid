@@ -184,13 +184,14 @@
           };
         });
 
-      # Everything the justfile's recipes call, besides Xcode: Bun runs the tests in tests/.
+      # Everything the justfile's recipes call, besides Xcode: Bun runs the tests in tests/. Not gh-touchid itself: no
+      # recipe runs it, and a released gh-touchid first on PATH here would answer `gh-touchid …` and Git's credential
+      # requests in place of the one installed, whatever its version.
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
             packages = [
-              self.packages.${system}.default
               pkgs.actionlint
               pkgs.bun
               pkgs.git
