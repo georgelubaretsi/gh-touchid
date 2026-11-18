@@ -134,9 +134,17 @@ func requiredFields(of schema: Schema) -> [String] {
     return []
 }
 
-/// A field's command-line flag: `client_id` is `--client-id`, the array `repos` is `--repo`.
+/// A field's command-line flag: `client_id` is `--client-id`; the arrays `repos` and `permissions` are `--repo` and
+/// `--permission`, given once per value.
 func flagName(_ field: String) -> String {
-    field == "repos" ? "--repo" : "--" + field.replacingOccurrences(of: "_", with: "-")
+    switch field {
+    case "repos":
+        return "--repo"
+    case "permissions":
+        return "--permission"
+    default:
+        return "--" + field.replacingOccurrences(of: "_", with: "-")
+    }
 }
 
 /// Switches that are not `--<field>` or `--no-<field>`.

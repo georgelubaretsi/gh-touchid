@@ -33,7 +33,7 @@ private func reportUntrustedHolder(_ holder: String, _ peer: PeerIdentity) {
 
 /// The protocol this command speaks to the agent: `agentProtocol`, or an earlier one the agent named when it refused
 /// that one, if this build speaks it too (an earlier release's agent, which this one trusts).
-private var spokenProtocol = agentProtocol
+private(set) var spokenProtocol = agentProtocol
 
 /// `request` with the protocol and version every request to the agent carries.
 private func versioned(_ request: [String: Any]) -> [String: Any] {
@@ -53,23 +53,25 @@ private func reportProtocolRefusal(_ reply: [String: Any]) {
     )
 }
 
-/// The agent's reply to `request`; nil when no agent this one trusts answers.
-func agentRequest(_ request: [String: Any]) -> [String: Any]? {
-    agentRequest(request, takingOver: true)
+/// The agent's reply to `request`; nil when no agent this one trusts answers, or when it speaks a protocol below
+/// `lowest`, in which `request` would mean less than it asks.
+func agentRequest(_ request: [String: Any], lowest: Int = 1) -> [String: Any]? {
+    agentRequest(request, takingOver: true, lowest: lowest)
 }
 
-private func agentRequest(_ request: [String: Any], takingOver: Bool) -> [String: Any]? {
-    guard agentProblem == nil else {
+private func agentRequest(_ request: [String: Any], takingOver: Bool, lowest: Int) -> [String: Any]? {
+    guard agentProblem == nil, spokenProtocol >= lowest else {
         return nil
     }
     switch exchange(agentSocketPath, versioned(request), accepts: \.isTrusted) {
     case let .answered(reply, _):
         guard !isProtocolRefusal(reply) else {
-            // the refusal acted on nothing: ask again, once, in the agent's protocol when this build speaks it
+            // the refusal acted on nothing: ask again, once, in the agent's protocol when this build speaks it (and
+            // it is at least `lowest`)
             if let theirs = reply["protocol"] as? Int, spokenProtocol == agentProtocol, theirs != agentProtocol,
                agentProtocols.contains(theirs) {
                 spokenProtocol = theirs
-                return agentRequest(request, takingOver: takingOver)
+                return agentRequest(request, takingOver: takingOver, lowest: lowest)
             }
             reportProtocolRefusal(reply)
             return nil
@@ -79,7 +81,7 @@ private func agentRequest(_ request: [String: Any], takingOver: Bool) -> [String
         return nil
     case let .rejected(.revoked(version), holder) where takingOver:
         takeOverRevokedAgent(version: version, holder: holder)
-        return agentRequest(request, takingOver: false)
+        return agentRequest(request, takingOver: false, lowest: lowest)
     case let .rejected(peer, holder):
         reportUntrustedHolder(holder, peer)
         return nil
@@ -168,17 +170,27 @@ private func takeOverRevokedAgent(version: String, holder: String) {
     )
 }
 
-/// Whether tokens for `repository` include workflows now: elevated in the agent, or in any agent of 0.4.0/0.4.1 on
-/// the built-in list as trusted. An elevation is the repository's, whichever session (or none) a use goes through, as
-/// it was in those releases; `status` lists them the same way.
-func isElevated(_ repository: String) -> Bool {
-    if agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true {
-        return true
+/// The permissions tokens for `repository` get now beyond the everyday ones: those it is elevated for in the agent, and
+/// `workflows` when an agent of protocol 1 or 2, or of 0.4.0/0.4.1 on the built-in list as trusted, has it elevated (an
+/// elevation is for `workflows` there). An elevation is the repository's, whichever session (or none) a use goes
+/// through, as it was in those releases; `status` lists them the same way.
+func elevatedPermissions(_ repository: String) -> Set<String> {
+    var permissions: Set<String> = []
+    if let reply = agentRequest(["op": "check", "repo": repository]) {
+        if (reply["protocol"] as? Int ?? 0) >= 3 {
+            permissions.formUnion((reply["permissions"] as? [String] ?? []).compactMap(validPermission))
+        } else if reply["elevated"] as? Bool == true {
+            permissions.formUnion(defaultElevation)
+        }
     }
-    return legacySockets().contains { socket in
+    let legacyElevated = legacySockets().contains { socket in
         legacyRequest(socket, ["op": "check", "repo": repository], accepts: isOlderRelease)?.0["elevated"] as? Bool
             == true
     }
+    if legacyElevated {
+        permissions.formUnion(defaultElevation)
+    }
+    return permissions
 }
 
 /// Ends every session and elevation: in the agent (one this gh-touchid trusts, or a revoked one) and in every agent
@@ -223,9 +235,11 @@ func agentStatus() -> (sessions: [SessionInfo], elevations: [Elevation]) {
     return (sessions, elevations)
 }
 
-/// An elevation as an agent reports it.
+/// An elevation as an agent reports it: for one permission (`workflows` from agents of protocol 1 or 2 and of
+/// 0.4.0/0.4.1, whose elevations are for it).
 struct Elevation {
     let repository: String
+    let permission: String
     let until: Date
     /// The agent of 0.4.0/0.4.1 that holds it; nil for the agent's own.
     let legacy: LegacyAgent?
@@ -235,6 +249,14 @@ struct Elevation {
               let repository = message["repo"] as? String,
               let until = message["until"] as? Double else {
             return nil
+        }
+        if let named = message["permission"] {
+            guard let permission = (named as? String).flatMap(validPermission) else {
+                return nil
+            }
+            self.permission = permission
+        } else {
+            self.permission = defaultElevation[0]
         }
         self.repository = repository
         self.until = Date(timeIntervalSince1970: until)

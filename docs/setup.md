@@ -16,10 +16,18 @@ gh-touchid opens a local page, `http://127.0.0.1:47911/`, which sends GitHub a m
 named `acme-touchid` unless `--name` says otherwise. It has no webhook, the callback URL
 `http://127.0.0.1:47911/callback`, and these repository permissions:
 
-| Permission                                          | Access         |
-| --------------------------------------------------- | -------------- |
-| Contents, Pull requests, Issues, Actions, Workflows | Read and write |
-| Checks, Commit statuses, Metadata                   | Read-only      |
+| Permission                                                                            | Access         |
+| ------------------------------------------------------------------------------------- | -------------- |
+| Contents, Pull requests, Issues, Actions, Workflows, Environments, Secrets, Variables | Read and write |
+| Checks, Commit statuses, Metadata                                                     | Read-only      |
+
+Tokens get these permissions without Workflows, Environments, Secrets and Variables. Those four, and any permission
+you give the App later, reach a token only while its repository is [elevated](sessions.md#elevating-a-repository) for
+them: `elevate` alone adds Workflows, and `elevate --permission NAME` adds another, named as GitHub names it:
+`environments` (an environment's secrets and variables), `secrets` (the repository's Actions secrets) or
+`actions_variables` (its Actions variables). For example, `gh-touchid elevate --for 30m --permission environments`
+lets an agent set an environment's secrets and variables. An App made by 0.7.0 or earlier lacks Environments,
+Secrets and Variables; add them on its settings page, and accept them where it is installed.
 
 The browser then goes through three pages on GitHub:
 

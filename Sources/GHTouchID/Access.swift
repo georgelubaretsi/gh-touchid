@@ -14,10 +14,11 @@ import Foundation
 //    first, and nothing for Git.
 // 6. Inside a pending session: one Touch ID approves the session, then as 4 or 5.
 // 7. Anything else: Touch ID naming the command and who asked, then one token for R.
-// Tokens of 4–7 come from your sign-in to R's owner's App, narrowed to R; they include `workflows` only if R is
-// elevated when the token is made, which is after any dialog; issue-only tokens never do. Reader tokens have no
-// permissions and reach no repository, which GitHub confirms for each before gh gets it (Reader.swift). Every outcome
-// is logged with the process chain.
+// Tokens of 4–7 come from your sign-in to R's owner's App, narrowed to R; they get the installation's everyday
+// permissions (GitHubApp.swift), and those of its other permissions R is elevated for when the token is made, which is
+// after any dialog; issue-only tokens get issues and reading only. Reader tokens have no permissions and reach no
+// repository, which GitHub confirms for each before gh gets it (Reader.swift). Every outcome is logged with the process
+// chain.
 
 struct GitHubCredential {
     let token: String
@@ -27,6 +28,8 @@ struct GitHubCredential {
     let expires: Date?
     /// How the token is ended after its use.
     let revocation: TokenRevocation
+    /// The permissions of the installation a narrowed token was made without, with the installation's level.
+    var heldBack: [String: String] = [:]
 }
 
 /// How a handed-out token is ended after its use.
@@ -215,17 +218,17 @@ func issueCredential(_ authorization: Authorization) throws -> GitHubCredential 
                 throw ToolError.missingRepository
             }
             // asked now, not before the dialog: an elevation that ran out or was locked meanwhile no longer counts
-            let elevated = isElevated(repository)
-            let token = try mintScopedToken(repository: repository, scope: .repository(includeWorkflows: elevated))
+            let elevated = elevatedPermissions(repository)
+            let token = try mintScopedToken(repository: repository, scope: .repository(elevated: elevated))
             let grant = session.map { "session \($0.label)\($0.legacy.map { " of \($0.marker)" } ?? "")" } ?? "once"
-            appendAccessLog(
-                "granted \(repository) (\(grant))\(elevated ? ", elevated" : "") as \(token.login) to \(chain)"
-            )
+            let elevation = elevated.isEmpty ? "" : ", elevated for \(elevated.sorted().joined(separator: ", "))"
+            appendAccessLog("granted \(repository) (\(grant))\(elevation) as \(token.login) to \(chain)")
             return GitHubCredential(
                 token: token.token,
                 username: token.login,
                 expires: token.expires,
-                revocation: .scoped(token.app)
+                revocation: .scoped(token.app),
+                heldBack: token.heldBack
             )
         case let .issues(session):
             guard let repository = authorization.repository else {

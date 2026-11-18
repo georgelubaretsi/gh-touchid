@@ -42,16 +42,34 @@ until it exits.
 
 # Elevating a repository
 
-Tokens never include the `workflows` permission, which changing `.github/workflows` needs, unless the repository is
-elevated:
+Tokens get only the everyday permissions, at most at these levels: contents, pull requests, issues and Actions to
+write; checks, commit statuses and metadata to read. Everything else the App has reaches a token only while the
+repository is elevated for it: `workflows`, which changing `.github/workflows` needs; `environments`, `secrets` and
+`actions_variables`, which [`app create`](setup.md#1-a-github-app-per-owner) also asks for, to set an environment's
+secrets and variables, the repository's Actions secrets or its Actions variables; any permission added to the App,
+such as Administration; and one of the everyday ones at a higher level. A permission GitHub adds later is held back
+the same way.
+
+Elevating a repository lets the permissions you name through for a while, at the level the App has:
 
 ```sh
 gh-touchid elevate --for 30m --repo acme/one
+gh-touchid elevate --for 30m --repo acme/one --permission environments --permission secrets
 ```
 
-- `elevate` asks for Touch ID.
+- `elevate` asks for Touch ID. The window names the repositories, the permissions and the duration.
 - `--for` takes `30m`, `8h`, `1h30m` or `1d`, the longest.
 - Each `--repo` names one repository. Without one, the current repository is elevated.
-- Running `elevate` again sets a new end time.
+- Each `--permission` names one permission as GitHub spells it (`environments`, `secrets`, `actions_variables`,
+  `administration`). Without one, `elevate` adds `workflows`. A permission is elevated only for the repositories
+  named, and only until the end time.
+- Running `elevate` again sets a new end time for the permissions it names.
+- `status` lists each elevated repository and permission with its end time.
 - Elevation counts when a token is made, which is after any Touch ID dialog. A command still waiting on a dialog when
-  the elevation ends, or when `lock` runs, gets a token without `workflows`.
+  the elevation ends, or when `lock` runs, gets a token without those permissions.
+- When `gh` fails with a token made without a permission the App has, other than `workflows`, a notice names the
+  permissions and the `elevate --permission` command. GitHub itself says only "Resource not accessible by
+  integration".
+- The background agent of an earlier release (0.7.0 and before) elevates for `workflows` only. While it runs,
+  `elevate` with any other permission is refused before the Touch ID window; it exits once its sessions and
+  elevations end, or `gh-touchid lock` ends it now. Elevations made through 0.7.0 count for `workflows` only.

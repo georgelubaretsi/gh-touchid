@@ -34,8 +34,8 @@ export const binary = resolve(repositoryRoot, process.env.GH_TOUCHID_BINARY ?? "
 
 /**
  * The other builds scripts/test-builds.sh makes, to meet other releases: the same sources stating version 0.1.0,
- * which the test build's list trusts; the test build with that one revoked on its list; gh-touchid 0.4.2 and 0.4.1;
- * and the same sources stating version 9.0.0.
+ * which the test build's list trusts; the test build with that one revoked on its list; gh-touchid 0.4.2, 0.4.1 and
+ * 0.7.0; and the same sources stating version 9.0.0.
  */
 export const builds = {
   older: resolve(repositoryRoot, "build/test/older/gh-touchid"),
@@ -43,7 +43,9 @@ export const builds = {
   legacy: resolve(repositoryRoot, "build/test/legacy/gh-touchid"),
   /** gh-touchid 0.4.2, the last release of agent protocol 1. */
   previous: resolve(repositoryRoot, "build/test/previous/gh-touchid"),
-  /** The same sources stating version 9.0.0, which 0.4.2 takes for a later release. */
+  /** gh-touchid 0.7.0, the last release of agent protocol 2, which the test build's list trusts. */
+  protocol2: resolve(repositoryRoot, "build/test/protocol2/gh-touchid"),
+  /** The same sources stating version 9.0.0, which 0.4.2 and 0.7.0 take for a later release. */
   later: resolve(repositoryRoot, "build/test/later/gh-touchid"),
 } as const;
 

@@ -1,5 +1,19 @@
 # Upgrading
 
+## From 0.7.0
+
+- If an owner's App has permissions beyond the everyday ones (contents, pull requests, issues and Actions to write;
+  checks, commit statuses and metadata to read), such as Environments, Secrets, Administration, or Checks or Commit
+  statuses at write, tokens now get one only while the repository is [elevated](sessions.md#elevating-a-repository)
+  for it: `gh-touchid elevate --for 30m --permission environments`. `elevate` alone still adds `workflows`. An App
+  made with `app create` and left as it was is not affected.
+- `app create` now also asks for Environments, Secrets and Variables. An App made earlier lacks them; to let agents
+  set environment or repository secrets and variables, add them on the App's settings page and accept them where it
+  is installed.
+- An earlier release's background agent, still running after the upgrade, elevates for `workflows` only, so
+  `elevate --permission` with another permission is refused until it exits or `gh-touchid lock` ends it. Elevations
+  made through 0.7.0 count for `workflows` only.
+
 ## From 0.4.2
 
 - `app set` is now `app add`, with the same arguments; `app set` no longer exists.

@@ -131,6 +131,10 @@ private let repositoriesSchema = Schema.array(
     .string(pattern: "^[^/\\s]+/[^/\\s]+$", description: "owner/name"),
     description: "Repositories; without them, those of the working folder."
 )
+private let permissionsSchema = Schema.array(
+    .string(pattern: "^[a-z][a-z0-9_]{0,63}$", description: "A permission as GitHub names it: environments."),
+    description: "The App's permissions to add; without them, workflows."
+)
 private let folderSchema = Schema.string(
     argument: true,
     description: "The folder to run in; by default the current one."
@@ -365,8 +369,10 @@ let commandOperations: [Operation] = [
             + "`gh api` the one its endpoint names, for `gh repo view OWNER/REPO` and the like their argument, else "
             + "GH_REPO, else the current repository's origin; a GraphQL query is not read, so if gh fails with a "
             + "token taken that way, a notice names its repository and what to set instead. The token "
-            + "acts as you through the owner's App and lacks the workflows permission unless the repository is "
-            + "elevated; outside a session, each use asks for Touch ID. With no repository, or for an owner "
+            + "acts as you through the owner's App with only its everyday permissions (contents, pull requests, "
+            + "issues and Actions; checks, commit statuses and metadata to read); `elevate` adds others, such as "
+            + "workflows, for a while. If gh fails with a token made without one the App has, a "
+            + "notice names it. Outside a session, each use asks for Touch ID. With no repository, or for an owner "
             + "without an App, it uses the public reader when one is stored (no Touch ID, public data only), and "
             + "otherwise refuses before asking. Everything after `gh` goes to GitHub CLI: `gh-touchid gh --help` "
             + "is its help. With --json, its output is captured.",
@@ -501,24 +507,32 @@ let commandOperations: [Operation] = [
     Operation(
         name: "elevate",
         words: ["elevate"],
-        title: "Let tokens include workflows for a while",
-        description: "`elevate` lets tokens for the repositories (without --repo, the current one) include the "
-            + "workflows permission for a while: 30m, 8h, 1h30m, at most 1d. It asks for Touch ID.",
-        example: "gh-touchid elevate --for 30m --repo acme/widgets",
+        title: "Let tokens include more of the App's permissions for a while",
+        description: "`elevate` lets tokens for the repositories (without --repo, the current one) include more of the "
+            + "owner's App's permissions for a while: workflows, or the ones named with --permission, such as "
+            + "environments or secrets. Tokens get a permission beyond the everyday ones only this way. "
+            + "--for takes 30m, 8h, 1h30m, at most 1d. It asks for Touch ID, naming the permissions.",
+        example: "gh-touchid elevate --for 30m --repo acme/widgets --permission environments",
         positional: [],
         input: objectSchema([
             ("for", .string(pattern: "^(\\d+d)?(\\d+h)?(\\d+m)?$", description: "How long: 30m, 8h, 1h30m, 1d.")),
             ("repos", repositoriesSchema),
+            ("permissions", permissionsSchema),
             ("cwd", folderSchema),
         ], required: ["for"]),
         output: objectSchema([
             ("repositories", .array(.string(), description: "The elevated repositories.")),
+            ("permissions", .array(.string(), description: "The permissions they are elevated for.")),
             ("until", .string(description: "When the elevation ends, ISO 8601.")),
-        ], required: ["repositories", "until"]),
+        ], required: ["repositories", "permissions", "until"]),
         annotations: Annotations(readOnly: false, destructive: false, idempotent: true, openWorld: false),
         run: { _, input in
             try enterFolder(input)
-            return try elevate(duration: input["for"] as? String ?? "", repositories: input["repos"] as? [String])
+            return try elevate(
+                duration: input["for"] as? String ?? "",
+                repositories: input["repos"] as? [String],
+                permissions: input["permissions"] as? [String]
+            )
         },
         text: { _ in nil }
     ),
@@ -725,13 +739,19 @@ func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? 
         return 128 + number
     }
     let status = try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay, capture: capture)
-    // a token for one repository, and maybe not the one gh acted on; not after a signal (128 + its number)
-    if let hint = requested?.hint, (1..<128).contains(status) {
-        switch authorization.grant {
-        case .app, .issues:
-            Notices.tell(hint)
-        case .account, .reader:
-            break
+    // not after a signal (128 + its number)
+    if (1..<128).contains(status) {
+        // a token for one repository, and maybe not the one gh acted on
+        if let hint = requested?.hint {
+            switch authorization.grant {
+            case .app, .issues:
+                Notices.tell(hint)
+            case .account, .reader:
+                break
+            }
+        }
+        if let notice = heldBackNotice(credential.heldBack, repository: authorization.target) {
+            Notices.tell(notice)
         }
     }
     return status
@@ -876,20 +896,58 @@ private func registerSession(repositories named: [String]?) throws -> [String: A
     ]
 }
 
-/// `elevate`: tokens for these repositories (by default the current one) include workflows for `duration`.
-private func elevate(duration: String, repositories named: [String]?) throws -> [String: Any] {
+/// `elevate`: tokens for these repositories (by default the current one) get these permissions (by default
+/// `workflows`) for `duration`. An agent of protocol 1 or 2 elevates for `workflows` only, so the dialog for other
+/// permissions is not shown while one runs. Before the dialog the agent is only asked, never started: a new agent with
+/// nothing to hold stops within a minute, while the dialog may wait five.
+private func elevate(
+    duration: String,
+    repositories named: [String]?,
+    permissions requested: [String]?
+) throws -> [String: Any] {
     let seconds = try parseDuration(duration)
     let repositories = try repositoriesOption(named.map { ["--repo": $0] } ?? [:])
-    try authenticate(.elevation(repositories: repositories, seconds: seconds, by: requester()))
+    let given = Array(Set((requested ?? []).compactMap(validPermission))).sorted()
+    let permissions = given.isEmpty ? defaultElevation : given
+    _ = agentRequest(["op": "status"])
+    if let agentProblem {
+        throw ToolError.agent(agentProblem)
+    }
+    try refuseEarlierProtocol(permissions)
+    try authenticate(
+        .elevation(repositories: repositories, permissions: permissions, seconds: seconds, by: requester())
+    )
+    // the agent asked before may have stopped, or another taken its place, while the dialog waited, or even now; in
+    // protocol 1 or 2 this request elevates for workflows, so for other permissions it goes only in protocol 3
     try ensureAgent()
-    let reply = agentRequest(["op": "elevate", "repos": repositories, "seconds": seconds])
+    let request: [String: Any] = [
+        "op": "elevate", "repos": repositories, "seconds": seconds, "permissions": permissions,
+    ]
+    let reply = agentRequest(request, lowest: permissions == defaultElevation ? 1 : 3)
     guard reply?["ok"] as? Bool == true else {
+        try refuseEarlierProtocol(permissions)
         throw ToolError.agent(reply?["error"] as? String ?? "the agent did not accept the elevation")
     }
     let until = Date().addingTimeInterval(seconds)
     fputs(
-        "Elevated \(repositories.joined(separator: ", ")) until \(localTime(until)): their tokens include workflows.\n",
+        "Elevated \(repositories.joined(separator: ", ")) for \(permissions.joined(separator: ", ")) until "
+            + "\(localTime(until)): their tokens include \(permissions.count == 1 ? "it" : "them").\n",
         stderr
     )
-    return ["repositories": repositories, "until": ISO8601DateFormatter().string(from: until)]
+    return [
+        "repositories": repositories,
+        "permissions": permissions,
+        "until": ISO8601DateFormatter().string(from: until),
+    ]
+}
+
+/// Refuses permissions other than `workflows` while the agent speaks protocol 1 or 2, whose elevations are for
+/// `workflows` only.
+private func refuseEarlierProtocol(_ permissions: [String]) throws {
+    guard spokenProtocol >= 3 || permissions == defaultElevation else {
+        throw ToolError.agent(
+            "the background program is an earlier gh-touchid, which elevates for workflows only; it stops once its "
+                + "sessions and elevations end, or run `gh-touchid lock` to end them now"
+        )
+    }
 }

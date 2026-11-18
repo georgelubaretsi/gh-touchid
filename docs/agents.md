@@ -14,8 +14,8 @@ harnesses have not been verified to keep hidden PTY input and Git credential-hel
 - Starting a session is the user's decision. The user, or a harness plugin, runs `gh-touchid session` from the agent's
   process (a tool's `sh -c` counts as the agent). The first GitHub use then shows the approval dialog, and the user
   decides. Outside a session, gh-touchid prints a hint to stderr with each per-use dialog.
-- `elevate` and `as` are the user's decision too. Show the exact command, its repositories and duration before
-  starting it.
+- `elevate` and `as` are the user's decision too. Show the exact command, its repositories, permissions and duration
+  before starting it.
 - Storing Apps, sign-ins, account tokens and the reader's key is for humans only. Run `gh-touchid account add` and
   `app add` in an interactive PTY where the user types at the hidden prompt. Run `app create`, `app login` and
   `reader create` from the user's own terminal. Never request or accept a token, secret or key through chat, tool

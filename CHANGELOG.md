@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gh-touchid --help --json` (and `help --json`) also lists every command as `help` shows it, under `commands`
   (`command`, `tool`, `title`, `usage`, `description`, `example`), and every error code with its exit status and
   meaning, under `errors` (`code`, `exit_status`, `description`). `tools`, which the MCP adapter serves, is unchanged.
+- `gh-touchid elevate --permission NAME` (repeatable; `permissions` in `--input`) elevates the repositories for
+  other permissions of the owner's App, such as `environments` or `secrets`. `elevate` alone still adds `workflows`.
+  The Touch ID window names the permissions, and `status` lists each elevated permission per repository.
+- `gh-touchid app create` also asks for Environments, Secrets and Variables (read and write), which tokens get only
+  while their repository is elevated for them: `elevate --permission environments` lets an agent set an environment's
+  secrets and variables, `--permission secrets` the repository's Actions secrets, and `--permission
+  actions_variables` its Actions variables.
 
 ### Changed
 
@@ -20,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [docs/errors.md](docs/errors.md) are made from gh-touchid's own declarations, so they list every command, its
   input and output, and every error code, including `error`, which `--json` already reported for failures without a
   code of their own. The release tarball includes `docs/`.
+
+### Security
+
+- Tokens for a repository get only the everyday permissions (contents, pull requests, issues and Actions to write;
+  checks, commit statuses and metadata to read), at most at those levels, plus the permissions the
+  repository is elevated for. Before, they got every permission of the owner's App except `workflows`, so a
+  permission added to the App, such as Environments, Secrets or Administration, reached every session's tokens. Now
+  each needs `elevate --permission`, only for the repositories and time elevated, and so does any permission GitHub
+  adds later. When `gh` fails with a token made without one the App has, a notice names it and the `elevate`
+  command. Apps made with `app create` and left as they were are not affected.
+- The background agent speaks protocol 3, which carries the permissions. An earlier release's agent (0.7.0 and
+  before) elevates for `workflows` only: while it runs, `elevate --permission` with any other permission is refused
+  before the Touch ID window, until it exits or `gh-touchid lock` ends it. Elevations made through 0.7.0 count for
+  `workflows` only.
 
 ## [0.7.0] - 2026-11-03
 

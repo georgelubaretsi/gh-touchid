@@ -20,18 +20,21 @@ gh-touchid lock      # ends every session approval and elevation now
   LOGIN: any program can use that login; gh auth logout to close it`. It runs no other `gh` to tell. It looks only
   for an `oauth_token` in gh's `hosts.yml` (in `GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh` or `~/.config/gh`) and for
   gh's Keychain item `gh:github.com`, by its attributes, never its secret;
-- sessions (pending or approved, program, folder, start time, repositories) and elevations.
+- sessions (pending or approved, program, folder, start time, repositories) and elevations: one line per repository
+  and permission, such as `acme/one  environments until 2026-11-19 14:30`.
 
 Sessions and elevations live in a small background agent that `session` or `elevate` starts. Every release you have
 installed shares one agent. After an upgrade the old release's agent keeps serving, so running sessions stay approved;
-it exits when nothing is left, and the next use starts the new release's. Logging out or restarting ends everything
-too. (See [Security model](security-model.md#sessions-and-the-background-agent).)
+it exits when nothing is left, and the next use starts the new release's. An earlier release's agent (0.7.0 and
+before) elevates for `workflows` only, so `elevate --permission` with another permission is refused until it exits or
+`gh-touchid lock` ends it. Logging out or restarting ends everything too. (See
+[Security model](security-model.md#sessions-and-the-background-agent).)
 
 Every use, granted or refused, is logged to `~/Library/Logs/gh-touchid/access.log` with the chain of processes that
 asked:
 
 ```text
-granted acme/one (session agent[700]), elevated as octocat to gh-touchid[812] < git-remote-https[811] < git[810] < zsh[790] < agent[700]
+granted acme/one (session agent[700]), elevated for environments, workflows as octocat to gh-touchid[812] < git-remote-https[811] < git[810] < zsh[790] < agent[700]
 granted acme/three (issues, session agent[700]) as octocat to …
 granted kubevirt/kubevirt (reader gh-touchid-reader-1a2b3c) to …
 granted acme/one (as octocat) to …

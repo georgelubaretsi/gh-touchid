@@ -133,19 +133,27 @@ extension Prompt {
         )
     }
 
-    /// `elevate`: tokens for the repositories include workflows for a while.
-    static func elevation(repositories: [String], seconds: TimeInterval, by requester: Requester) -> Prompt {
+    /// `elevate`: tokens for the repositories include these permissions of the App for a while.
+    static func elevation(
+        repositories: [String],
+        permissions: [String],
+        seconds: TimeInterval,
+        by requester: Requester
+    ) -> Prompt {
         let duration = durationWords(seconds)
+        let words = permissions.count <= 1
+            ? permissions.first ?? ""
+            : permissions.dropLast().joined(separator: ", ") + " and " + permissions[permissions.count - 1]
         return Prompt(
             rows: [
-                Row(key: "action", value: "change workflows", emphasis: .strong),
+                Row(key: "action", value: "add \(words)", emphasis: .strong),
                 Row(key: "repos", value: repositoryLines(repositories), emphasis: .strong),
-                Row(key: "risk", value: "workflows can read secrets", emphasis: .warning),
+                Row(key: "risk", value: elevationRisks(permissions), emphasis: .warning),
                 Row(key: "from", value: requester.from),
                 Row(key: "scope", value: duration, emphasis: .warning),
             ],
             allowLabel: "allow for \(duration)",
-            fallback: "let your agents change workflows in \(repositoryWords(repositories)) for \(duration)"
+            fallback: "let tokens for \(repositoryWords(repositories)) include \(words) for \(duration)"
         )
     }
 
@@ -471,6 +479,31 @@ private func shellQuoted(_ argument: String) -> String {
 private func shortened(_ text: String, limit: Int = 60) -> String {
     let line = printable(text, limit: text.count)
     return line.count > limit ? String(line.prefix(limit - 1)) + "…" : line
+}
+
+/// What elevated permissions let a token do that it cannot without them, as the elevation dialog warns.
+private func elevationRisks(_ permissions: [String]) -> String {
+    var risks: [String] = []
+    for permission in permissions {
+        let risk = elevationRisk(permission)
+        if !risks.contains(risk) {
+            risks.append(risk)
+        }
+    }
+    return risks.joined(separator: "; ")
+}
+
+private func elevationRisk(_ permission: String) -> String {
+    switch permission {
+    case "workflows":
+        return "workflows can read secrets"
+    case "environments", "secrets", "actions_variables":
+        return "secrets and variables can be replaced"
+    case "administration":
+        return "settings and branch protection can change"
+    default:
+        return "\(permission) as far as the App may"
+    }
 }
 
 /// `acme/one, two and three`: the owner once when all share it, at most three names.

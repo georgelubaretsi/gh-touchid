@@ -9,21 +9,94 @@ import Foundation
 // installed on no repository, so its tokens read public data and GitHub refuses them most writes; the one write GitHub
 // lets through, opening an issue, gh-touchid refuses before a token is made (IssueCheck.swift).
 
-/// A token for one repository that acts as `login`, and the App that made it (to revoke it).
+/// A token for one repository that acts as `login`, the App that made it (to revoke it), and what its installation has
+/// that the token was made without: each permission with the installation's level.
 struct ScopedToken {
     let token: String
     let expires: Date
     let login: String
     let app: AppCredentials
+    let heldBack: [String: String]
 }
 
-/// What a token may do: the installation's permissions (without `workflows` unless the repository is elevated), or
-/// just open issues and read the repository.
+/// The permissions a token for a repository may have without elevation, each at most at this level: what working on
+/// code, pull requests, issues and Actions runs needs. Anything else an installation has reaches a token only while
+/// the repository is elevated for it: `workflows`, `environments`, `secrets` and `actions_variables` (which `app
+/// create` also asks for), a higher level of one of these, and every permission an owner added to the App or GitHub
+/// introduces later.
+let everydayPermissions = [
+    "actions": "write",
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write",
+    "checks": "read",
+    "statuses": "read",
+    "metadata": "read",
+]
+
+/// What an elevation is for when it names no permission: `workflows`, as every elevation was before agent protocol 3.
+let defaultElevation = ["workflows"]
+
+/// A GitHub permission's name as GitHub writes it (`pull_requests`): a lowercase letter, then lowercase letters,
+/// digits and underscores, at most 64 in all; or nil.
+func validPermission(_ name: String) -> String? {
+    guard let first = name.unicodeScalars.first, ("a" ... "z").contains(first), name.unicodeScalars.count <= 64,
+          name.unicodeScalars.allSatisfy({ ("a" ... "z").contains($0) || ("0" ... "9").contains($0) || $0 == "_" })
+    else {
+        return nil
+    }
+    return name
+}
+
+/// What a token may do: the installation's everyday permissions, and those of its other permissions the repository is
+/// elevated for; or just open issues and read the repository.
 enum TokenScope {
-    case repository(includeWorkflows: Bool)
+    case repository(elevated: Set<String>)
     case issues
 
     static let issuePermissions = ["issues": "write", "metadata": "read", "contents": "read"]
+}
+
+private let permissionLevels = ["read": 1, "write": 2, "admin": 3]
+
+/// The permissions to ask for in a token for one repository, and those of the installation it goes without (with the
+/// installation's level): each permission the repository is elevated for, at the installation's level; each other
+/// everyday permission the installation has, at the lower of the two levels. A level gh-touchid does not know is held
+/// back unless elevated.
+func repositoryPermissions(
+    installation: [String: Any],
+    elevated: Set<String>
+) -> (granted: [String: String], heldBack: [String: String]) {
+    var granted: [String: String] = [:]
+    var heldBack: [String: String] = [:]
+    for case let (name, level as String) in installation {
+        if elevated.contains(name) {
+            granted[name] = level
+        } else if let ceiling = everydayPermissions[name], let have = permissionLevels[level],
+                  let most = permissionLevels[ceiling] {
+            granted[name] = have <= most ? level : ceiling
+            if have > most {
+                heldBack[name] = level
+            }
+        } else {
+            heldBack[name] = level
+        }
+    }
+    return (granted, heldBack)
+}
+
+/// What to tell the caller when gh fails with a token made without some of its installation's permissions, other than
+/// `workflows`, which GitHub names in its refusals; for the others it says only "Resource not accessible by
+/// integration". It names no permission to elevate for: gh-touchid cannot tell which one gh needed.
+func heldBackNotice(_ heldBack: [String: String], repository: String) -> String? {
+    let named = heldBack.filter { $0.key != "workflows" }.sorted { $0.key < $1.key }.map { "\($0.key) (\($0.value))" }
+    guard let last = named.last else {
+        return nil
+    }
+    let list = named.count == 1 ? last : named.dropLast().joined(separator: ", ") + " and " + last
+    return "gh failed with a token for \(repository) made without \(list), which the \(ownerAccount(repository)) App "
+        + "has; a token includes one while the repository is elevated for it: gh-touchid elevate --for 30m --repo "
+        + "\(repository) --permission NAME"
 }
 
 /// A sign-in is renewed once it has less than this left, so that every token narrowed from it lasts at least this long.
@@ -33,16 +106,15 @@ private let renewalMargin: TimeInterval = 60 * 60
 func mintScopedToken(repository: String, scope: TokenScope) throws -> ScopedToken {
     let owner = ownerAccount(repository)
     let (app, signIn) = try currentSignIn(owner: owner)
-    let permissions: [String: Any]
+    let permissions: [String: String]
+    let heldBack: [String: String]
     switch scope {
-    case let .repository(includeWorkflows):
-        var granted = try installationPermissions(owner: owner, token: signIn.accessToken)
-        if !includeWorkflows {
-            granted.removeValue(forKey: "workflows")
-        }
-        permissions = granted
+    case let .repository(elevated):
+        let installation = try installationPermissions(owner: owner, token: signIn.accessToken)
+        (permissions, heldBack) = repositoryPermissions(installation: installation, elevated: elevated)
     case .issues:
         permissions = TokenScope.issuePermissions
+        heldBack = [:]
     }
 
     let response = try githubAPI(
@@ -77,7 +149,7 @@ func mintScopedToken(repository: String, scope: TokenScope) throws -> ScopedToke
     }
     let expires = (response.object?["expires_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
         ?? Date(timeIntervalSince1970: signIn.accessExpires)
-    return ScopedToken(token: token, expires: expires, login: signIn.login, app: app)
+    return ScopedToken(token: token, expires: expires, login: signIn.login, app: app, heldBack: heldBack)
 }
 
 /// Ends a token narrowed from your sign-in (`DELETE /applications/{client_id}/token`); the sign-in stays.

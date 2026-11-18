@@ -13,16 +13,15 @@ import Foundation
 // Touch ID stores them, and the browser goes on to the installation page while gh-touchid waits for the installation
 // and proves it with one token, checked and revoked.
 
-private let manifestPermissions = [
-    "actions": "write",
-    "contents": "write",
-    "issues": "write",
-    "pull_requests": "write",
-    "workflows": "write",
-    "checks": "read",
-    "statuses": "read",
-    "metadata": "read",
-]
+/// What `app create` asks for: the everyday permissions (GitHubApp.swift), which every token may have, and those only a
+/// repository's elevation for them adds to its tokens: `workflows`, `environments` (an environment's secrets and
+/// variables), `secrets` (the repository's Actions secrets) and `actions_variables` (its Actions variables). GitHub's
+/// published permission schema lacks `actions_variables` (github/rest-api-description#5437), but GitHub's manifest
+/// check takes it, where it refuses `variables` ("Default permission records resource is not included in the list"),
+/// as a manifest posted to settings/apps/new showed on 19 Nov 2026.
+private let manifestPermissions = everydayPermissions.merging(
+    ["workflows": "write", "environments": "write", "secrets": "write", "actions_variables": "write"]
+) { everyday, _ in everyday }
 
 /// How long the manifest step may take; GitHub's codes last an hour too.
 private let manifestTimeout: TimeInterval = 60 * 60

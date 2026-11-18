@@ -62,9 +62,10 @@ let statusOperation = Operation(
         ], required: ["program", "pid", "folder", "repositories", "started", "approved", "holder"]))),
         ("elevations", .array(objectSchema([
             ("repository", .string()),
+            ("permission", .string(description: "The GitHub permission tokens for the repository include.")),
             ("until", .string(description: "ISO 8601.")),
             ("holder", .nullable(.string(description: "The older gh-touchid whose agent holds it.")))
-        ], required: ["repository", "until", "holder"]))),
+        ], required: ["repository", "permission", "until", "holder"]))),
     ], required: ["apps", "accounts", "reader", "git", "gh", "agent", "sessions", "elevations"]),
     annotations: Annotations(readOnly: true, destructive: false, idempotent: true, openWorld: false),
     run: { _, _ in try currentStatus() },
@@ -111,6 +112,7 @@ private func currentStatus() throws -> [String: Any] {
         "elevations": elevations.map { elevation -> [String: Any] in
             [
                 "repository": elevation.repository,
+                "permission": elevation.permission,
                 "until": format.string(from: elevation.until),
                 "holder": nullable(elevation.legacy?.marker),
             ]
@@ -173,10 +175,12 @@ private func statusText(_ output: [String: Any]) -> String {
         }
     }
     if !elevations.isEmpty {
-        lines.append("Elevated (tokens include workflows):")
+        lines.append("Elevated (tokens include these permissions):")
         for elevation in elevations {
             let repository = elevation["repository"] as? String ?? ""
-            lines.append("  \(repository)  until \(localTime(date(elevation["until"])))\(holder(elevation["holder"]))")
+            let permission = elevation["permission"] as? String ?? ""
+            let until = localTime(date(elevation["until"]))
+            lines.append("  \(repository)  \(permission) until \(until)\(holder(elevation["holder"]))")
         }
     }
     return lines.joined(separator: "\n")

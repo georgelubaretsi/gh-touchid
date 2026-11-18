@@ -1,6 +1,6 @@
-// The tokens gh and Git get from your sign-in to an owner's App: narrowed to one repository, without `workflows`
-// unless elevated, issue-only outside a session's repositories, revoked after gh, and the sign-in renewed when it is
-// about to end. Every token here is made by the mock; the assertions read what it recorded.
+// The tokens gh and Git get from your sign-in to an owner's App: narrowed to one repository, with only the everyday
+// permissions unless elevated, issue-only outside a session's repositories, revoked after gh, and the sign-in renewed
+// when it is about to end. Every token here is made by the mock; the assertions read what it recorded.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -15,6 +15,34 @@ function withoutWorkflows(permissions: Permissions): Permissions {
   const { workflows: _, ...rest } = permissions;
   return rest;
 }
+
+/**
+ * An installation with more than the everyday permissions: checks and statuses at write, workflows, permissions an
+ * owner added (environments, secrets, administration) and one GitHub might add later; contents at read, and no issues.
+ */
+const broad: Permissions = {
+  actions: "write",
+  contents: "read",
+  pull_requests: "write",
+  checks: "write",
+  statuses: "write",
+  metadata: "read",
+  workflows: "write",
+  environments: "write",
+  secrets: "read",
+  administration: "write",
+  added_later: "write",
+};
+
+/** What a token for `broad` gets unless the repository is elevated: each everyday permission at most at its level. */
+const broadEveryday: Permissions = {
+  actions: "write",
+  contents: "read",
+  pull_requests: "write",
+  checks: "read",
+  statuses: "read",
+  metadata: "read",
+};
 
 function basic(app: App): string {
   return `Basic ${Buffer.from(`${app.clientId}:${app.clientSecret}`).toString("base64")}`;
@@ -73,6 +101,8 @@ describe("one use outside a session", () => {
     expect(result.status).toBe(1);
     expect(env.ghCalls()).toHaveLength(1);
     expectRevoked(env, env.mock.scopedTokens()[0]!, app);
+    // made without workflows only, which GitHub's refusals name themselves
+    expect(result.stderr).not.toContain("made without");
   });
 
   for (const [signal, number] of [["SIGTERM", 15], ["SIGINT", 2], ["SIGHUP", 1]] as const) {
@@ -191,7 +221,67 @@ describe("elevation", () => {
       withoutWorkflows(installation.permissions),
       withoutWorkflows(installation.permissions),
     ]);
-    expect(env.accessLog().filter((line) => line.includes("granted acme/widgets (once), elevated as alice"))).toHaveLength(1);
+    expect(env.accessLog().filter((line) => line.includes("granted acme/widgets (once), elevated for workflows as alice")))
+      .toHaveLength(1);
+  });
+
+  test("without elevation a token gets the everyday permissions at most at their levels; elevation adds the ones it names", async () => {
+    await using env = await TestEnv.create();
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
+    const use = ["gh", "-R", "acme/widgets", "issue", "list"];
+    expect((await env.run(use)).status).toBe(0);
+    expect((await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets"])).status).toBe(0);
+    expect((await env.run(use)).status).toBe(0);
+    const named = await env.run([
+      "elevate", "--for", "30m", "--repo", "acme/widgets", "--permission", "environments", "--permission", "statuses",
+    ]);
+    expect(named.status).toBe(0);
+    expect(named.auth).toEqual(["let tokens for acme/widgets include environments and statuses for 30 minutes"]);
+    expect((await env.run(use)).status).toBe(0);
+
+    expect(env.mock.scopedTokens().map((token) => token.permissions)).toEqual([
+      broadEveryday,
+      { ...broadEveryday, workflows: "write" },
+      { ...broadEveryday, workflows: "write", environments: "write", statuses: "write" },
+    ]);
+    expect(env.accessLog().join("\n")).toContain(
+      "granted acme/widgets (once), elevated for environments, statuses, workflows as alice",
+    );
+    const status = await env.run(["status"]);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}environments until /m);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}statuses until /m);
+    expect(status.stdout).toMatch(/^ {2}acme\/widgets {2}workflows until /m);
+  });
+
+  test("a permission name GitHub could not have is refused before asking", async () => {
+    await using env = await TestEnv.create();
+    seedAcme(env);
+    const result = await env.run(["elevate", "--for", "30m", "--repo", "acme/widgets", "--permission", "Environments"]);
+    expect(result.status).toBe(2);
+    expect(result.auth).toEqual([]);
+  });
+
+  test("when gh fails, a notice names what the token was made without, other than workflows", async () => {
+    await using env = await TestEnv.create();
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
+    const failed = await env.run(["gh", "-R", "acme/widgets", "pr", "list"], { env: { FAKE_GH_EXIT: "1" } });
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain(
+      "gh failed with a token for acme/widgets made without added_later (write), administration (write), checks "
+        + "(write), environments (write), secrets (read) and statuses (write), which the acme App has; a token "
+        + "includes one while the repository is elevated for it: gh-touchid elevate --for 30m --repo acme/widgets "
+        + "--permission NAME",
+    );
+
+    const succeeded = await env.run(["gh", "-R", "acme/widgets", "pr", "list"]);
+    expect(succeeded.status).toBe(0);
+    expect(succeeded.stderr).not.toContain("made without");
+    const names = ["added_later", "administration", "checks", "environments", "secrets", "statuses"];
+    const elevate = ["elevate", "--for", "30m", "--repo", "acme/widgets", ...names.flatMap((name) => ["--permission", name])];
+    expect((await env.run(elevate)).status).toBe(0);
+    const elevated = await env.run(["gh", "-R", "acme/widgets", "pr", "list"], { env: { FAKE_GH_EXIT: "1" } });
+    expect(elevated.status).toBe(1);
+    expect(elevated.stderr).not.toContain("made without");
   });
 });
 
@@ -533,6 +623,21 @@ describe("Git", () => {
     expect(Number(answer.match(/^password_expiry_utc=(\d+)$/m)![1])).toBe(scoped[0]!.expiresAt);
     expect(scoped[0]!.revoked).toBe(false);
     expect(env.mock.revocations).toEqual([]);
+  });
+
+  test("Git's token gets the everyday permissions too, and a permission the repository is elevated for", async () => {
+    await using env = await TestEnv.create();
+    const { git } = await configureGit(env);
+    env.seedOwner({ owner: "acme", login: "alice", repositories: ["widgets"], permissions: broad });
+    expect((await env.exec([git, "ls-remote", `${env.mock.url}/acme/widgets.git`])).status).toBe(0);
+    const elevate = ["elevate", "--for", "30m", "--repo", "acme/widgets", "--permission", "environments"];
+    expect((await env.run(elevate)).status).toBe(0);
+    expect((await env.exec([git, "ls-remote", `${env.mock.url}/acme/widgets.git`])).status).toBe(0);
+
+    expect(env.mock.scopedTokens().map((token) => token.permissions)).toEqual([
+      broadEveryday,
+      { ...broadEveryday, environments: "write" },
+    ]);
   });
 
   test("inside a session, Git gets an issue-only token for a private repository it does not list", async () => {
