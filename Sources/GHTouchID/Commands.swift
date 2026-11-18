@@ -917,11 +917,15 @@ private func elevate(
     try authenticate(
         .elevation(repositories: repositories, permissions: permissions, seconds: seconds, by: requester())
     )
-    // the agent asked before may have stopped, or another taken its place, while the dialog waited
+    // the agent asked before may have stopped, or another taken its place, while the dialog waited, or even now; in
+    // protocol 1 or 2 this request elevates for workflows, so for other permissions it goes only in protocol 3
     try ensureAgent()
-    try refuseEarlierProtocol(permissions)
-    let reply = agentRequest(["op": "elevate", "repos": repositories, "seconds": seconds, "permissions": permissions])
+    let request: [String: Any] = [
+        "op": "elevate", "repos": repositories, "seconds": seconds, "permissions": permissions,
+    ]
+    let reply = agentRequest(request, lowest: permissions == defaultElevation ? 1 : 3)
     guard reply?["ok"] as? Bool == true else {
+        try refuseEarlierProtocol(permissions)
         throw ToolError.agent(reply?["error"] as? String ?? "the agent did not accept the elevation")
     }
     let until = Date().addingTimeInterval(seconds)

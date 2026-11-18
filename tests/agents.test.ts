@@ -367,6 +367,36 @@ describe("agent protocol 2, which 0.7.0 speaks", () => {
       expect(status.stdout).not.toContain("environments");
     });
 
+  test("an agent of 0.7.0 that takes over while the elevation dialog waits is sent nothing for other permissions",
+    async () => {
+      await using env = await TestEnv.create();
+      seedAcmeWithEnvironments(env);
+      // the later build (stating 9.0.0), which 0.7.0's agent trusts to elevate: had the request gone to that agent in
+      // protocol 2, it would have been recorded as an elevation for workflows
+      const later = { binary: builds.later };
+      const protocol2 = {
+        binary: builds.protocol2,
+        env: { GH_TOUCHID_TEST_PEER_REQUIREMENT: requirementFor(builds.later) },
+      };
+      // the later build's own agent answers when elevate starts, so the window is shown
+      expect((await env.run(["session", "--repo", "acme/widgets"], later)).status).toBe(0);
+      const environments = ["elevate", "--for", "1h", "--repo", "acme/widgets", "--permission", "environments"];
+      const running = env.start(environments, { ...later, env: { GH_TOUCHID_TEST_AUTH_DELAY: "3" } });
+      await running.waitForStderr(/^AUTH: /m);
+
+      // while the dialog waits, that agent ends and 0.7.0's takes agent.sock
+      expect((await env.run(["lock"], later)).status).toBe(0);
+      expect((await env.run(["session", "--repo", "acme/widgets"], protocol2)).status).toBe(0);
+      expect(await env.agentRequest({ op: "status", protocol: 3 })).toMatchObject({ error: "protocol", protocol: 2 });
+
+      const result = await running.finished;
+      expect(result.status).toBe(1);
+      expect(result.auth).toHaveLength(1);
+      expect(result.stderr).toContain("elevates for workflows only");
+      expect(env.accessLog().some((line) => /elevated acme\/widgets/.test(line))).toBe(false);
+      expect((await env.run(["status"], protocol2)).stdout).not.toContain("Elevated");
+    });
+
   test("0.7.0 meets an agent of this build: its tokens include workflows only while elevated for workflows",
     async () => {
       await using env = await TestEnv.create();

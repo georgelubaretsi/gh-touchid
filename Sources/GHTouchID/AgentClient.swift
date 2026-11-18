@@ -53,23 +53,25 @@ private func reportProtocolRefusal(_ reply: [String: Any]) {
     )
 }
 
-/// The agent's reply to `request`; nil when no agent this one trusts answers.
-func agentRequest(_ request: [String: Any]) -> [String: Any]? {
-    agentRequest(request, takingOver: true)
+/// The agent's reply to `request`; nil when no agent this one trusts answers, or when it speaks a protocol below
+/// `lowest`, in which `request` would mean less than it asks.
+func agentRequest(_ request: [String: Any], lowest: Int = 1) -> [String: Any]? {
+    agentRequest(request, takingOver: true, lowest: lowest)
 }
 
-private func agentRequest(_ request: [String: Any], takingOver: Bool) -> [String: Any]? {
-    guard agentProblem == nil else {
+private func agentRequest(_ request: [String: Any], takingOver: Bool, lowest: Int) -> [String: Any]? {
+    guard agentProblem == nil, spokenProtocol >= lowest else {
         return nil
     }
     switch exchange(agentSocketPath, versioned(request), accepts: \.isTrusted) {
     case let .answered(reply, _):
         guard !isProtocolRefusal(reply) else {
-            // the refusal acted on nothing: ask again, once, in the agent's protocol when this build speaks it
+            // the refusal acted on nothing: ask again, once, in the agent's protocol when this build speaks it (and
+            // it is at least `lowest`)
             if let theirs = reply["protocol"] as? Int, spokenProtocol == agentProtocol, theirs != agentProtocol,
                agentProtocols.contains(theirs) {
                 spokenProtocol = theirs
-                return agentRequest(request, takingOver: takingOver)
+                return agentRequest(request, takingOver: takingOver, lowest: lowest)
             }
             reportProtocolRefusal(reply)
             return nil
@@ -79,7 +81,7 @@ private func agentRequest(_ request: [String: Any], takingOver: Bool) -> [String
         return nil
     case let .rejected(.revoked(version), holder) where takingOver:
         takeOverRevokedAgent(version: version, holder: holder)
-        return agentRequest(request, takingOver: false)
+        return agentRequest(request, takingOver: false, lowest: lowest)
     case let .rejected(peer, holder):
         reportUntrustedHolder(holder, peer)
         return nil
