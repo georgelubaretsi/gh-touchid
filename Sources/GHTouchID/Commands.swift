@@ -365,8 +365,9 @@ let commandOperations: [Operation] = [
             + "`gh api` the one its endpoint names, for `gh repo view OWNER/REPO` and the like their argument, else "
             + "GH_REPO, else the current repository's origin; a GraphQL query is not read, so if gh fails with a "
             + "token taken that way, a notice names its repository and what to set instead. The token "
-            + "acts as you through the owner's App and lacks the workflows permission unless the repository is "
-            + "elevated; outside a session, each use asks for Touch ID. With no repository, or for an owner "
+            + "acts as you through the owner's App with only the permissions `app create` gives an App, without "
+            + "workflows, unless the repository is elevated; if gh fails with a token made without one the App has, "
+            + "a notice names it. Outside a session, each use asks for Touch ID. With no repository, or for an owner "
             + "without an App, it uses the public reader when one is stored (no Touch ID, public data only), and "
             + "otherwise refuses before asking. Everything after `gh` goes to GitHub CLI: `gh-touchid gh --help` "
             + "is its help. With --json, its output is captured.",
@@ -501,9 +502,10 @@ let commandOperations: [Operation] = [
     Operation(
         name: "elevate",
         words: ["elevate"],
-        title: "Let tokens include workflows for a while",
-        description: "`elevate` lets tokens for the repositories (without --repo, the current one) include the "
-            + "workflows permission for a while: 30m, 8h, 1h30m, at most 1d. It asks for Touch ID.",
+        title: "Let tokens use all of the App's permissions for a while",
+        description: "`elevate` lets tokens for the repositories (without --repo, the current one) use all of the "
+            + "owner's App's permissions for a while: workflows, and any the App has beyond what `app create` gives "
+            + "it, such as environments or secrets. 30m, 8h, 1h30m, at most 1d. It asks for Touch ID.",
         example: "gh-touchid elevate --for 30m --repo acme/widgets",
         positional: [],
         input: objectSchema([
@@ -725,13 +727,19 @@ func runGitHub(_ arguments: [String], account: String?, capture: OutputCapture? 
         return 128 + number
     }
     let status = try runGitHubCLI(cli, arguments: arguments, token: credential.token, relay: relay, capture: capture)
-    // a token for one repository, and maybe not the one gh acted on; not after a signal (128 + its number)
-    if let hint = requested?.hint, (1..<128).contains(status) {
-        switch authorization.grant {
-        case .app, .issues:
-            Notices.tell(hint)
-        case .account, .reader:
-            break
+    // not after a signal (128 + its number)
+    if (1..<128).contains(status) {
+        // a token for one repository, and maybe not the one gh acted on
+        if let hint = requested?.hint {
+            switch authorization.grant {
+            case .app, .issues:
+                Notices.tell(hint)
+            case .account, .reader:
+                break
+            }
+        }
+        if let notice = heldBackNotice(credential.heldBack, repository: authorization.target) {
+            Notices.tell(notice)
         }
     }
     return status
@@ -876,7 +884,8 @@ private func registerSession(repositories named: [String]?) throws -> [String: A
     ]
 }
 
-/// `elevate`: tokens for these repositories (by default the current one) include workflows for `duration`.
+/// `elevate`: tokens for these repositories (by default the current one) get all of the App's permissions for
+/// `duration`.
 private func elevate(duration: String, repositories named: [String]?) throws -> [String: Any] {
     let seconds = try parseDuration(duration)
     let repositories = try repositoriesOption(named.map { ["--repo": $0] } ?? [:])
@@ -888,7 +897,8 @@ private func elevate(duration: String, repositories named: [String]?) throws -> 
     }
     let until = Date().addingTimeInterval(seconds)
     fputs(
-        "Elevated \(repositories.joined(separator: ", ")) until \(localTime(until)): their tokens include workflows.\n",
+        "Elevated \(repositories.joined(separator: ", ")) until \(localTime(until)): their tokens get all of the "
+            + "App's permissions, workflows included.\n",
         stderr
     )
     return ["repositories": repositories, "until": ISO8601DateFormatter().string(from: until)]

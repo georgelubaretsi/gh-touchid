@@ -42,8 +42,13 @@ until it exits.
 
 # Elevating a repository
 
-Tokens never include the `workflows` permission, which changing `.github/workflows` needs, unless the repository is
-elevated:
+Tokens get only the permissions [`app create`](setup.md#1-a-github-app-per-owner) gives an App, at most at its
+levels: contents, pull requests, issues and Actions to write; checks, commit statuses and metadata to read. Everything
+else the App has reaches a token only while the repository is elevated: `workflows`, which changing
+`.github/workflows` needs, and any permission added to the App, such as Environments, Secrets or Administration, or
+one of the others at a higher level. A permission GitHub adds later is held back the same way.
+
+Elevating a repository lets them through for a while:
 
 ```sh
 gh-touchid elevate --for 30m --repo acme/one
@@ -54,4 +59,6 @@ gh-touchid elevate --for 30m --repo acme/one
 - Each `--repo` names one repository. Without one, the current repository is elevated.
 - Running `elevate` again sets a new end time.
 - Elevation counts when a token is made, which is after any Touch ID dialog. A command still waiting on a dialog when
-  the elevation ends, or when `lock` runs, gets a token without `workflows`.
+  the elevation ends, or when `lock` runs, gets a token without those permissions.
+- When `gh` fails with a token made without a permission the App has, other than `workflows`, a notice names the
+  permissions and the `elevate` command. GitHub itself says only "Resource not accessible by integration".

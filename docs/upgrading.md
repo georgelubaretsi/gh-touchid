@@ -1,5 +1,11 @@
 # Upgrading
 
+## From 0.7.0
+
+- If an owner's App has permissions beyond those `app create` gives it (Environments, Secrets, Administration, or
+  Checks or Commit statuses at write, for example), tokens now get them only while the repository is
+  [elevated](sessions.md#elevating-a-repository). An App made with `app create` and left as it was is not affected.
+
 ## From 0.4.2
 
 - `app set` is now `app add`, with the same arguments; `app set` no longer exists.

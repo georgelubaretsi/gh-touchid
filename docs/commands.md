@@ -29,7 +29,7 @@ an [error code](errors.md). The annotations are MCP's tool hints. See [Scripts a
 | [`gh-touchid git credential <get\|store\|erase>`](#git-credential) | Git's credential helper |
 | [`gh-touchid as <login> [--] <command> [arguments...]`](#as) | Run a command as one of your accounts |
 | [`gh-touchid session [--repo <repo>]... [--cwd <cwd>]`](#session) | Register the calling program as a session |
-| [`gh-touchid elevate --for <for> [--repo <repo>]... [--cwd <cwd>]`](#elevate) | Let tokens include workflows for a while |
+| [`gh-touchid elevate --for <for> [--repo <repo>]... [--cwd <cwd>]`](#elevate) | Let tokens use all of the App's permissions for a while |
 | [`gh-touchid status`](#status) | What is stored and set up |
 | [`gh-touchid setup [<owners>...]`](#setup) | Set up what is missing |
 | [`gh-touchid lock`](#lock) | End every session approval and elevation |
@@ -380,10 +380,11 @@ gh-touchid gh <arguments...>
 `gh` runs GitHub CLI with a token for one repository: the one named with -R/--repo, for `gh api` the one its endpoint
 names, for `gh repo view OWNER/REPO` and the like their argument, else GH_REPO, else the current repository's origin; a
 GraphQL query is not read, so if gh fails with a token taken that way, a notice names its repository and what to set
-instead. The token acts as you through the owner's App and lacks the workflows permission unless the repository is
-elevated; outside a session, each use asks for Touch ID. With no repository, or for an owner without an App, it uses the
-public reader when one is stored (no Touch ID, public data only), and otherwise refuses before asking. Everything after
-`gh` goes to GitHub CLI: `gh-touchid gh --help` is its help. With --json, its output is captured.
+instead. The token acts as you through the owner's App with only the permissions `app create` gives an App, without
+workflows, unless the repository is elevated; if gh fails with a token made without one the App has, a notice names it.
+Outside a session, each use asks for Touch ID. With no repository, or for an owner without an App, it uses the public
+reader when one is stored (no Touch ID, public data only), and otherwise refuses before asking. Everything after `gh`
+goes to GitHub CLI: `gh-touchid gh --help` is its help. With --json, its output is captured.
 
 Example:
 
@@ -542,8 +543,9 @@ Annotations: read-only no · destructive no · idempotent no · open-world no.
 gh-touchid elevate --for <for> [--repo <repo>]... [--cwd <cwd>]
 ```
 
-`elevate` lets tokens for the repositories (without --repo, the current one) include the workflows permission for a
-while: 30m, 8h, 1h30m, at most 1d. It asks for Touch ID.
+`elevate` lets tokens for the repositories (without --repo, the current one) use all of the owner's App's permissions
+for a while: workflows, and any the App has beyond what `app create` gives it, such as environments or secrets. 30m, 8h,
+1h30m, at most 1d. It asks for Touch ID.
 
 Example:
 

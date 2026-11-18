@@ -7,8 +7,10 @@ against code that already runs as you ([below](#what-gh-touchid-does-not-defend-
 ## Tokens and what they reach
 
 - Every token gh-touchid makes acts as you, except the reader's ([below](#the-reader)). It is narrowed from your
-  sign-in to the owner's App (`POST /applications/{client_id}/token/scoped`) to one repository, without `workflows`
-  unless the repository is elevated. Issue-only tokens never include `workflows`.
+  sign-in to the owner's App (`POST /applications/{client_id}/token/scoped`) to one repository, with only the
+  permissions `app create` gives an App, without `workflows`, unless the repository is
+  [elevated](sessions.md#elevating-a-repository). Then it has all of the App's permissions. Issue-only tokens never
+  include `workflows`.
 - A narrowed token lasts as long as the sign-in's access token: at most 8 hours, at least one. gh-touchid renews the
   sign-in when less than an hour is left.
 - The token of a `gh` command is revoked when `gh` exits. SIGINT, SIGQUIT, SIGHUP and SIGTERM sent to gh-touchid are

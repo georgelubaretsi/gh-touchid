@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   input and output, and every error code, including `error`, which `--json` already reported for failures without a
   code of their own. The release tarball includes `docs/`.
 
+### Security
+
+- Tokens for a repository that is not elevated get only the permissions `app create` gives an App (contents, pull
+  requests, issues and Actions to write; checks, commit statuses and metadata to read), at most at those levels.
+  Before, they got every permission of the owner's App except `workflows`, so a permission added to the App, such as
+  Environments, Secrets or Administration, reached every session's tokens. Now `elevate` is needed for those, as for
+  `workflows`, and so is any permission GitHub adds later. When `gh` fails with a token made without one the App has,
+  a notice names it and the `elevate` command. Apps made with `app create` and left as they were are not affected.
+
 ## [0.7.0] - 2026-11-03
 
 ### Fixed

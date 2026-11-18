@@ -4,7 +4,7 @@
 - **Sign-in**: your authorization of an owner's App. gh-touchid narrows each use's token from it.
 - **Session**: a running program, such as an agent's harness, that you approved once with Touch ID. It and
   everything it starts get tokens for its repositories without Touch ID until it exits. See [Sessions](sessions.md).
-- **Elevate**: let tokens for a repository include the `workflows` permission for a while. See
+- **Elevate**: let tokens for a repository use all of the App's permissions, `workflows` among them, for a while. See
   [Elevating a repository](sessions.md#elevating-a-repository).
 - **Your accounts**: GitHub accounts whose own tokens you stored, for what your Apps cannot reach. See
   [Acting as one of your accounts](everyday-use.md#acting-as-one-of-your-accounts).
@@ -22,7 +22,8 @@
 
 - [Everyday use](everyday-use.md): which repository a command gets a token for, the Touch ID window, acting as one
   of your accounts.
-- [Sessions](sessions.md): approving a program once, and elevating a repository for `workflows`.
+- [Sessions](sessions.md): approving a program once, and elevating a repository for `workflows` and the App's other
+  permissions.
 - [Status, lock and the access log](status.md): what is stored, ending sessions, and who asked for what.
 - [Organizations with more members](organizations.md): sharing an owner's App with other people.
 - [AI agent usage](agents.md): running an agent inside a session.

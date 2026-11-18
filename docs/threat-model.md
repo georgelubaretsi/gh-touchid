@@ -13,7 +13,7 @@ from the user's side; Sources/GHTouchID/Access.swift has the policy itself.
 | Your sign-in to each owner's App: an access token (8 h) and a refresh token (6 months) | Keychain, `com.lubaretsi.gh-touchid.signin` | Together with the client secret it reaches every repository the App is installed on, with all its permissions, as far as your own access goes |
 | Each App's client secret | Keychain, `com.lubaretsi.gh-touchid.app` | Narrows, renews and revokes tokens of your sign-in |
 | Your accounts' tokens (`account add`) | Keychain, `com.lubaretsi.gh-touchid.user` | As broad and long-lived as you made them on GitHub |
-| Narrowed tokens, one per use | memory of gh-touchid, the env of the gh it starts, Git's credential pipe | One repository, `workflows` only when elevated; revoked after gh, Git's run out (at most 8 h) |
+| Narrowed tokens, one per use | memory of gh-touchid, the env of the gh it starts, Git's credential pipe | One repository; only the everyday permissions (`app create`'s, without `workflows`) unless elevated; revoked after gh, Git's run out (at most 8 h) |
 | The reader's private key (`reader create`, `reader add`) | Keychain, `com.lubaretsi.gh-touchid.reader` | Mints tokens of the reader App's bot until the key is deleted on GitHub; it never expires |
 | Reader tokens, one per use | memory of gh-touchid, the env of the gh it starts | No permissions and no repositories: public data only, plus opening issues on public repositories; revoked after gh; they act as the reader's bot, not as you |
 | Session approvals and elevations | memory of the background agent | Let a program and its descendants get tokens without Touch ID |
@@ -85,10 +85,12 @@ Development builds keep their items under `com.lubaretsi.gh-touchid.dev.*`; test
   argument or file.
 - Every handed-out token passes `authorizeUse` before `issueCredential` mints it: Touch ID, or an approved session
   that covers the use, or, for the reader, the issue check; acting as an account asks for Touch ID on every use.
-- A handed-out token covers exactly one repository and the installation's permissions minus `workflows`, unless the
-  repository is elevated when the token is minted; issue-only tokens never include `workflows`. A reader token covers
-  no repository and is used only when GitHub reports `permissions` `{}`, `repository_selection` `selected` and no
-  repositories; it goes only to the pinned gh, never to Git.
+- A handed-out token covers exactly one repository. Unless the repository is elevated when the token is minted, it
+  has only the everyday permissions (`everydayPermissions`: what `app create` gives an App, without `workflows`) that
+  the installation has, each at most at that level; anything else, a permission GitHub adds later included, needs
+  elevation. Issue-only tokens never include `workflows`. A reader token covers no repository and is used only when
+  GitHub reports `permissions` `{}`, `repository_selection` `selected` and no repositories; it goes only to the pinned
+  gh, never to Git.
 - The core links no third-party code. The adapter holds no secrets, never reads the Keychain or talks to the agent,
   and refuses operations that take a secret.
 - The token of a `gh` use is revoked when gh exits, also after SIGINT, SIGQUIT, SIGHUP and SIGTERM to gh-touchid.

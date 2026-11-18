@@ -133,19 +133,20 @@ extension Prompt {
         )
     }
 
-    /// `elevate`: tokens for the repositories include workflows for a while.
+    /// `elevate`: tokens for the repositories get all of the App's permissions for a while, `workflows` among them.
     static func elevation(repositories: [String], seconds: TimeInterval, by requester: Requester) -> Prompt {
         let duration = durationWords(seconds)
         return Prompt(
             rows: [
-                Row(key: "action", value: "change workflows", emphasis: .strong),
+                Row(key: "action", value: "use all the App's permissions", emphasis: .strong),
                 Row(key: "repos", value: repositoryLines(repositories), emphasis: .strong),
                 Row(key: "risk", value: "workflows can read secrets", emphasis: .warning),
                 Row(key: "from", value: requester.from),
                 Row(key: "scope", value: duration, emphasis: .warning),
             ],
             allowLabel: "allow for \(duration)",
-            fallback: "let your agents change workflows in \(repositoryWords(repositories)) for \(duration)"
+            fallback: "let your agents use all the App's permissions, workflows included, in "
+                + "\(repositoryWords(repositories)) for \(duration)"
         )
     }
 

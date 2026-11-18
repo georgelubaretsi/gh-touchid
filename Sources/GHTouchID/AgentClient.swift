@@ -168,9 +168,9 @@ private func takeOverRevokedAgent(version: String, holder: String) {
     )
 }
 
-/// Whether tokens for `repository` include workflows now: elevated in the agent, or in any agent of 0.4.0/0.4.1 on
-/// the built-in list as trusted. An elevation is the repository's, whichever session (or none) a use goes through, as
-/// it was in those releases; `status` lists them the same way.
+/// Whether tokens for `repository` get all of the App's permissions now: elevated in the agent, or in any agent of
+/// 0.4.0/0.4.1 on the built-in list as trusted. An elevation is the repository's, whichever session (or none) a use goes
+/// through, as it was in those releases; `status` lists them the same way.
 func isElevated(_ repository: String) -> Bool {
     if agentRequest(["op": "check", "repo": repository])?["elevated"] as? Bool == true {
         return true

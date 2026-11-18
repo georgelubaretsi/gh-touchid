@@ -173,7 +173,7 @@ private func statusText(_ output: [String: Any]) -> String {
         }
     }
     if !elevations.isEmpty {
-        lines.append("Elevated (tokens include workflows):")
+        lines.append("Elevated (tokens get all the App's permissions, workflows included):")
         for elevation in elevations {
             let repository = elevation["repository"] as? String ?? ""
             lines.append("  \(repository)  until \(localTime(date(elevation["until"])))\(holder(elevation["holder"]))")

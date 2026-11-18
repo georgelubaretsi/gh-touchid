@@ -21,6 +21,9 @@ named `acme-touchid` unless `--name` says otherwise. It has no webhook, the call
 | Contents, Pull requests, Issues, Actions, Workflows | Read and write |
 | Checks, Commit statuses, Metadata                   | Read-only      |
 
+Tokens get these permissions, without Workflows. Workflows, and any permission you give the App later, reach a token
+only while its repository is [elevated](sessions.md#elevating-a-repository).
+
 The browser then goes through three pages on GitHub:
 
 1. **Create GitHub App.** GitHub creates the App for the account you are signed in as in that browser, or for the
